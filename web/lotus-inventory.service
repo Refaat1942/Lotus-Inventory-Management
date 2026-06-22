@@ -1,0 +1,19 @@
+[Unit]
+Description=Lotus Inventory Management Web
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/lotus-inventory
+Environment=LOTUS_HOST=0.0.0.0
+Environment=LOTUS_PORT=10000
+Environment=LOTUS_SECRET_KEY=change-this-to-a-random-secret-key
+Environment=LOTUS_ADMIN_USER=admin
+Environment=LOTUS_ADMIN_PASS=admin
+ExecStart=/opt/lotus-inventory/venv/bin/uvicorn app:app --host 0.0.0.0 --port 10000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Login — Lotus Inventory</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body class="login-body">
+  <div class="login-bg-shapes">
+    <div class="shape shape-1"></div>
+    <div class="shape shape-2"></div>
+    <div class="shape shape-3"></div>
+  </div>
+
+  <div class="login-card animate-in">
+    <div class="login-brand">
+      <div class="logo logo-lg" id="loginLogo">LOTUS</div>
+      <h1 id="loginTitle">Lotus Inventory</h1>
+      <p id="loginTagline">Smart Inventory Engine</p>
+    </div>
+
+    <form id="loginForm" class="login-form">
+      <div class="field">
+        <label for="username">Username</label>
+        <input type="text" id="username" name="username" autocomplete="username" required placeholder="Enter username" />
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" autocomplete="current-password" required placeholder="Enter password" />
+      </div>
+      <button type="submit" class="btn btn-primary btn-block" id="loginBtn">
+        <span>Sign In</span>
+      </button>
+      <p class="login-error hidden" id="loginError"></p>
+    </form>
+  </div>
+
+  <footer class="footer login-footer" id="loginFooter">Copyright © Lotus Pharmacies 2026</footer>
+  <script src="/static/login.js"></script>
+</body>
+</html>
