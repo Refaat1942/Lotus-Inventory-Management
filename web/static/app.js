@@ -20,24 +20,26 @@ const UPLOADS = [
   { id: "similar_file", label: "7. Similar", required: false },
 ];
 
+const NAV_ITEMS = [
+  { view: "engine", perm: "engine_run", icon: "⚡", label: "Inventory Engine", sub: "Upload & run engine" },
+  { view: "engine", perm: "templates", icon: "📥", label: "Templates", sub: "Download Excel templates", scroll: "templatesSection" },
+  { view: "reports", perm: "reports", icon: "📊", label: "Reports", sub: "Usage & run statistics" },
+  { view: "logs", perm: "logs", icon: "📋", label: "Activity Logs", sub: "User actions history" },
+  { view: "users", perm: "users_manage", icon: "👥", label: "Users", sub: "Manage access control" },
+  { view: "branding", perm: "branding", icon: "🎨", label: "Branding", sub: "Logo & colors" },
+];
+
+const PAGE_META = {
+  engine: { title: "Inventory Engine", sub: "Follow the steps to run the smart inventory engine" },
+  reports: { title: "Reports", sub: "System usage and inventory run statistics" },
+  logs: { title: "Activity Logs", sub: "Track all user actions on the system" },
+  users: { title: "User Management", sub: "Control who sees what in the application" },
+  branding: { title: "Branding", sub: "Customize logo, title, and colors" },
+};
+
 let currentUser = null;
 let permissionsCatalog = {};
 const files = {};
-
-const templateGrid = document.getElementById("templateGrid");
-const uploadGrid = document.getElementById("uploadGrid");
-const runBtn = document.getElementById("runBtn");
-const clearBtn = document.getElementById("clearBtn");
-const historyBtn = document.getElementById("historyBtn");
-const stoThreshold = document.getElementById("stoThreshold");
-const customSto = document.getElementById("customSto");
-const zeroOverstock = document.getElementById("zeroOverstock");
-const progressPanel = document.getElementById("progressPanel");
-const progressText = document.getElementById("progressText");
-const progressFill = document.getElementById("progressFill");
-const toast = document.getElementById("toast");
-const adminBtn = document.getElementById("adminBtn");
-const userBadge = document.getElementById("userBadge");
 
 function hasPerm(key) {
   return currentUser?.permissions?.includes(key);
@@ -53,69 +55,167 @@ async function api(url, options = {}) {
 }
 
 function showToast(message, type = "success") {
+  const toast = document.getElementById("toast");
   toast.textContent = message;
   toast.className = `toast ${type} show`;
   setTimeout(() => toast.classList.remove("show"), 4500);
 }
 
+function setLogoImage(imgEl, textEl, containerEl, url) {
+  if (!imgEl || !textEl) return;
+  if (url) {
+    imgEl.src = url + "?t=" + Date.now();
+    imgEl.classList.remove("hidden");
+    textEl.classList.add("hidden");
+    containerEl?.classList.add("has-image");
+    imgEl.onerror = () => {
+      imgEl.classList.add("hidden");
+      textEl.classList.remove("hidden");
+      containerEl?.classList.remove("has-image");
+    };
+  } else {
+    imgEl.classList.add("hidden");
+    imgEl.removeAttribute("src");
+    textEl.classList.remove("hidden");
+    containerEl?.classList.remove("has-image");
+  }
+}
+
 function applyBranding(b) {
   if (!b) return;
-  if (b.app_title) document.getElementById("brandTitle").textContent = b.app_title;
+  if (b.app_title) {
+    document.getElementById("brandTitle").textContent = b.app_title;
+    document.title = b.app_title;
+  }
   if (b.app_tagline) document.getElementById("brandTagline").textContent = b.app_tagline;
   if (b.footer_text) document.getElementById("appFooter").textContent = b.footer_text;
   if (b.accent_color) {
     document.documentElement.style.setProperty("--accent", b.accent_color);
     document.documentElement.style.setProperty("--accent-hover", b.accent_color);
   }
-  document.title = b.app_title || "Lotus Inventory Management";
-  const logoEl = document.getElementById("brandLogo");
-  if (b.logo_url) {
-    logoEl.innerHTML = `<img src="${b.logo_url}?t=${Date.now()}" alt="Logo" />`;
-    logoEl.classList.add("has-image");
-  } else {
-    logoEl.textContent = "LOTUS";
-    logoEl.classList.remove("has-image");
+  const url = b.logo_url || null;
+  setLogoImage(
+    document.getElementById("brandLogoImg"),
+    document.getElementById("brandLogoText"),
+    document.getElementById("brandLogo"),
+    url
+  );
+  setLogoImage(
+    document.getElementById("brandingLogoImg"),
+    document.getElementById("brandingLogoText"),
+    document.getElementById("brandingLogoPreview"),
+    url
+  );
+}
+
+function buildSidebar() {
+  const nav = document.getElementById("sidebarNav");
+  nav.innerHTML = "";
+  const seen = new Set();
+  NAV_ITEMS.forEach((item) => {
+    if (!hasPerm(item.perm)) return;
+    const key = item.view + (item.scroll || "");
+    if (seen.has(key)) return;
+    seen.add(key);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "nav-item";
+    btn.dataset.view = item.view;
+    if (item.scroll) btn.dataset.scroll = item.scroll;
+    btn.innerHTML = `<span class="nav-icon">${item.icon}</span><span class="nav-text"><strong>${item.label}</strong><small>${item.sub}</small></span>`;
+    btn.addEventListener("click", () => navigateTo(item.view, item.scroll));
+    nav.appendChild(btn);
+  });
+}
+
+function navigateTo(view, scrollId) {
+  document.querySelectorAll(".view").forEach((v) => {
+    v.classList.remove("active");
+    v.classList.add("hidden");
+  });
+  const target = document.getElementById(`view-${view}`);
+  if (target) {
+    target.classList.remove("hidden");
+    target.classList.add("active");
+  }
+  document.querySelectorAll(".nav-item").forEach((n) => {
+    n.classList.toggle("active", n.dataset.view === view && (!scrollId || n.dataset.scroll === scrollId));
+  });
+  const meta = PAGE_META[view] || PAGE_META.engine;
+  document.getElementById("pageTitle").textContent = scrollId === "templatesSection" ? "Download Templates" : meta.title;
+  document.getElementById("pageSub").textContent = meta.sub;
+  if (view === "reports") loadReports();
+  if (view === "logs") loadLogs();
+  if (view === "users") loadUsers();
+  if (view === "branding") loadBrandingForm();
+  if (scrollId) {
+    setTimeout(() => document.getElementById(scrollId)?.scrollIntoView({ behavior: "smooth", block: "start" }), 150);
   }
 }
 
 function applyPermissions() {
-  document.getElementById("templatesSection").classList.toggle("hidden", !hasPerm("templates"));
-  document.getElementById("uploadSection").classList.toggle("hidden", !hasPerm("engine_run"));
-  document.getElementById("configSection").classList.toggle("hidden", !hasPerm("engine_run"));
-  document.getElementById("actionsSection").classList.toggle("hidden", !hasPerm("engine_run") && !hasPerm("history"));
-  runBtn.classList.toggle("hidden", !hasPerm("engine_run"));
-  clearBtn.classList.toggle("hidden", !hasPerm("engine_run"));
-  historyBtn.classList.toggle("hidden", !hasPerm("history"));
+  const canEngine = hasPerm("engine_run");
+  const canTemplates = hasPerm("templates");
+  document.getElementById("templatesSection")?.classList.toggle("hidden", !canTemplates);
+  document.getElementById("uploadSection")?.classList.toggle("hidden", !canEngine);
+  document.getElementById("configSection")?.classList.toggle("hidden", !canEngine);
+  document.getElementById("actionsSection")?.classList.toggle("hidden", !canEngine && !hasPerm("history"));
+  document.getElementById("runBtn")?.classList.toggle("hidden", !canEngine);
+  document.getElementById("clearBtn")?.classList.toggle("hidden", !canEngine);
+  document.getElementById("historyBtn")?.classList.toggle("hidden", !hasPerm("history"));
+  if (!canEngine && !canTemplates) {
+    document.getElementById("view-engine")?.classList.add("hidden");
+  } else {
+    document.getElementById("view-engine")?.classList.remove("hidden");
+  }
+  buildSidebar();
+  const first = NAV_ITEMS.find((i) => hasPerm(i.perm));
+  if (first) navigateTo(first.view, first.scroll);
+}
 
-  const canAdmin = hasPerm("users_manage") || hasPerm("branding");
-  adminBtn.classList.toggle("hidden", !canAdmin);
+function updateJourney() {
+  const steps = document.querySelectorAll(".journey-step");
+  const hasTemplates = hasPerm("templates");
+  const required = UPLOADS.filter((u) => u.required).map((u) => u.id);
+  const uploadsReady = required.every((id) => files[id]);
+  steps.forEach((s) => s.classList.remove("active", "done"));
+  if (hasTemplates) document.querySelector('[data-step="1"]')?.classList.add("done");
+  if (uploadsReady) {
+    document.querySelector('[data-step="1"]')?.classList.add("done");
+    document.querySelector('[data-step="2"]')?.classList.add("done");
+    document.querySelector('[data-step="3"]')?.classList.add("active");
+    document.querySelector('[data-step="4"]')?.classList.add("active");
+  } else if (Object.keys(files).length) {
+    document.querySelector('[data-step="1"]')?.classList.add("done");
+    document.querySelector('[data-step="2"]')?.classList.add("active");
+  } else if (hasTemplates) {
+    document.querySelector('[data-step="1"]')?.classList.add("active");
+  }
 }
 
 function updateRunButton() {
   if (!hasPerm("engine_run")) return;
   const required = UPLOADS.filter((u) => u.required).map((u) => u.id);
-  runBtn.disabled = !required.every((id) => files[id]);
+  document.getElementById("runBtn").disabled = !required.every((id) => files[id]);
+  updateJourney();
 }
 
 function buildTemplates() {
-  templateGrid.innerHTML = "";
-  TEMPLATES.forEach(({ id, label }, i) => {
+  const grid = document.getElementById("templateGrid");
+  grid.innerHTML = "";
+  TEMPLATES.forEach(({ id, label }) => {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "btn btn-template animate-in";
-    btn.style.animationDelay = `${i * 0.05}s`;
+    btn.className = "btn btn-template";
     btn.textContent = label;
-    btn.addEventListener("click", async () => {
-      window.location.href = `/api/templates/${id}`;
-    });
-    templateGrid.appendChild(btn);
+    btn.addEventListener("click", () => { window.location.href = `/api/templates/${id}`; });
+    grid.appendChild(btn);
   });
 }
 
 function setupUpload({ id, label, required }, index) {
   const item = document.createElement("div");
-  item.className = "upload-item animate-in";
-  item.style.animationDelay = `${index * 0.04}s`;
+  item.className = "upload-item";
   item.innerHTML = `
     <label>${label}${required ? ' <span class="req">*</span>' : ""}</label>
     <div class="file-drop" data-id="${id}">
@@ -123,14 +223,11 @@ function setupUpload({ id, label, required }, index) {
       <span>Drop file or click</span>
       <span class="filename">No file selected</span>
       <input type="file" accept=".xlsx,.xls" />
-    </div>
-  `;
-  uploadGrid.appendChild(item);
-
+    </div>`;
+  document.getElementById("uploadGrid").appendChild(item);
   const drop = item.querySelector(".file-drop");
   const input = item.querySelector("input");
   const filenameEl = item.querySelector(".filename");
-
   const setFile = (file) => {
     if (!file) return;
     files[id] = file;
@@ -138,15 +235,10 @@ function setupUpload({ id, label, required }, index) {
     filenameEl.textContent = file.name;
     updateRunButton();
   };
-
   input.addEventListener("change", () => setFile(input.files[0]));
   drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("dragover"); });
   drop.addEventListener("dragleave", () => drop.classList.remove("dragover"));
-  drop.addEventListener("drop", (e) => {
-    e.preventDefault();
-    drop.classList.remove("dragover");
-    setFile(e.dataTransfer.files[0]);
-  });
+  drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("dragover"); setFile(e.dataTransfer.files[0]); });
 }
 
 async function initSession() {
@@ -155,91 +247,100 @@ async function initSession() {
   const data = await res.json();
   currentUser = data.user;
   permissionsCatalog = data.permissions_catalog || {};
-  userBadge.textContent = currentUser.is_admin ? `${currentUser.username} (Admin)` : currentUser.username;
+  document.getElementById("userBadge").textContent = currentUser.is_admin ? `${currentUser.username} · Admin` : currentUser.username;
   applyBranding(data.branding);
-  applyPermissions();
   if (hasPerm("templates")) buildTemplates();
   if (hasPerm("engine_run")) UPLOADS.forEach(setupUpload);
-  if (hasPerm("users_manage") || hasPerm("branding")) initAdmin();
+  initUsers();
+  initBranding();
+  applyPermissions();
 }
 
-// --- Admin Panel ---
-function initAdmin() {
-  document.querySelectorAll(".modal-tabs .tab").forEach((tab) => {
-    tab.addEventListener("click", () => {
-      document.querySelectorAll(".modal-tabs .tab").forEach((t) => t.classList.remove("active"));
-      document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
-      tab.classList.add("active");
-      document.getElementById(`tab-${tab.dataset.tab}`).classList.add("active");
-    });
-  });
-
-  adminBtn.addEventListener("click", () => {
-    document.getElementById("adminModal").classList.remove("hidden");
-    if (hasPerm("users_manage")) loadUsers();
-    if (hasPerm("branding")) loadBrandingForm();
-  });
-
-  document.getElementById("closeAdmin").addEventListener("click", () =>
-    document.getElementById("adminModal").classList.add("hidden")
-  );
-
-  if (hasPerm("users_manage")) {
-    document.getElementById("addUserBtn").addEventListener("click", () => openUserModal());
-    document.getElementById("closeUserModal").addEventListener("click", closeUserModal);
-    document.getElementById("cancelUser").addEventListener("click", closeUserModal);
-    document.getElementById("userForm").addEventListener("submit", saveUser);
-    document.getElementById("editIsAdmin").addEventListener("change", (e) => {
-      document.getElementById("permFieldset").classList.toggle("hidden", e.target.checked);
-    });
-  } else {
-    document.querySelector('[data-tab="users"]').classList.add("hidden");
-    document.getElementById("tab-users").classList.add("hidden");
-    document.querySelector('[data-tab="branding"]').click();
+async function loadReports() {
+  try {
+    const res = await api("/api/admin/reports");
+    if (!res.ok) throw new Error((await res.json()).detail || "Failed to load reports");
+    const d = await res.json();
+  document.getElementById("statsGrid").innerHTML = `
+    <div class="stat-card"><span class="stat-val">${d.total_engine_runs}</span><span class="stat-label">Engine Runs</span></div>
+    <div class="stat-card"><span class="stat-val">${d.history_runs}</span><span class="stat-label">History Runs</span></div>
+    <div class="stat-card"><span class="stat-val">${d.history_records}</span><span class="stat-label">History Records</span></div>
+    <div class="stat-card"><span class="stat-val">${d.active_users}/${d.total_users}</span><span class="stat-label">Active Users</span></div>
+    <div class="stat-card"><span class="stat-val">${d.total_logins}</span><span class="stat-label">Total Logins</span></div>`;
+  const tbody = document.querySelector("#recentActivityTable tbody");
+  tbody.innerHTML = (d.recent_activity || []).map((r) => `
+    <tr><td>${formatTime(r.created_at)}</td><td>${r.username}</td><td><span class="tag tag-active">${r.action}</span></td><td>${r.details || "—"}</td></tr>
+  `).join("") || "<tr><td colspan='4'>No activity yet</td></tr>";
+  } catch (err) {
+    document.getElementById("statsGrid").innerHTML = `<p class="hint">${err.message}</p>`;
   }
+}
 
-  if (hasPerm("branding")) {
-    document.getElementById("brandingForm").addEventListener("submit", saveBranding);
-  } else {
-    document.querySelector('[data-tab="branding"]').classList.add("hidden");
+async function loadLogs() {
+  try {
+    const res = await api("/api/admin/logs");
+    if (!res.ok) throw new Error((await res.json()).detail || "Failed to load logs");
+    const data = await res.json();
+  document.querySelector("#logsTable tbody").innerHTML = (data.logs || []).map((l) => `
+    <tr>
+      <td>${formatTime(l.created_at)}</td>
+      <td><strong>${l.username}</strong></td>
+      <td><span class="tag tag-active">${l.action}</span></td>
+      <td>${l.details || "—"}</td>
+      <td>${l.ip_address || "—"}</td>
+    </tr>
+  `).join("") || "<tr><td colspan='5'>No logs yet</td></tr>";
+  } catch (err) {
+    document.querySelector("#logsTable tbody").innerHTML = `<tr><td colspan='5'>${err.message}</td></tr>`;
   }
+}
+
+function formatTime(iso) {
+  if (!iso) return "—";
+  try { return new Date(iso).toLocaleString(); } catch { return iso; }
+}
+
+function initUsers() {
+  document.getElementById("addUserBtn")?.addEventListener("click", () => openUserModal());
+  document.getElementById("closeUserModal")?.addEventListener("click", closeUserModal);
+  document.getElementById("cancelUser")?.addEventListener("click", closeUserModal);
+  document.getElementById("userForm")?.addEventListener("submit", saveUser);
+  document.getElementById("editIsAdmin")?.addEventListener("change", (e) => {
+    document.getElementById("permFieldset").classList.toggle("hidden", e.target.checked);
+  });
+}
+
+function initBranding() {
+  document.getElementById("brandingForm")?.addEventListener("submit", saveBranding);
 }
 
 function renderPermLegend() {
-  const el = document.getElementById("permLegend");
-  el.innerHTML = Object.entries(permissionsCatalog).map(([k, v]) =>
-    `<span class="perm-chip" title="${k}">${v}</span>`
-  ).join("");
+  document.getElementById("permLegend").innerHTML = Object.entries(permissionsCatalog)
+    .map(([k, v]) => `<span class="perm-chip" title="${k}">${v}</span>`).join("");
 }
 
 async function loadUsers() {
+  if (!hasPerm("users_manage")) return;
   const res = await api("/api/admin/users");
   const data = await res.json();
   permissionsCatalog = data.permissions;
   renderPermLegend();
   renderPermCheckboxes();
-
-  const tbody = document.querySelector("#usersTable tbody");
-  tbody.innerHTML = data.users.map((u) => `
+  document.querySelector("#usersTable tbody").innerHTML = data.users.map((u) => `
     <tr>
       <td><strong>${u.username}</strong></td>
       <td>${u.is_admin ? '<span class="tag tag-admin">Admin</span>' : '<span class="tag">User</span>'}</td>
       <td>${u.is_active ? '<span class="tag tag-active">Active</span>' : '<span class="tag tag-off">Disabled</span>'}</td>
-      <td class="perm-cell">${u.is_admin ? "All permissions" : (u.permissions || []).map(p => `<span class="perm-chip-sm">${permissionsCatalog[p] || p}</span>`).join("")}</td>
+      <td class="perm-cell">${u.is_admin ? "Full access" : (u.permissions || []).map((p) => `<span class="perm-chip-sm">${permissionsCatalog[p] || p}</span>`).join("")}</td>
       <td class="actions-cell">
         <button class="btn btn-sm btn-ghost" data-edit="${u.id}">Edit</button>
         ${u.id !== currentUser.id ? `<button class="btn btn-sm btn-danger" data-del="${u.id}">Delete</button>` : ""}
       </td>
-    </tr>
-  `).join("");
-
-  tbody.querySelectorAll("[data-edit]").forEach((btn) =>
-    btn.addEventListener("click", () => {
-      const user = data.users.find((u) => u.id === +btn.dataset.edit);
-      openUserModal(user);
-    })
+    </tr>`).join("");
+  document.querySelectorAll("[data-edit]").forEach((btn) =>
+    btn.addEventListener("click", () => openUserModal(data.users.find((u) => u.id === +btn.dataset.edit)))
   );
-  tbody.querySelectorAll("[data-del]").forEach((btn) =>
+  document.querySelectorAll("[data-del]").forEach((btn) =>
     btn.addEventListener("click", async () => {
       if (!confirm("Delete this user?")) return;
       await api(`/api/admin/users/${btn.dataset.del}`, { method: "DELETE" });
@@ -250,15 +351,8 @@ async function loadUsers() {
 }
 
 function renderPermCheckboxes(selected = []) {
-  const el = document.getElementById("permCheckboxes");
-  el.innerHTML = Object.entries(permissionsCatalog)
-    .filter(([k]) => k !== "users_manage" || hasPerm("users_manage"))
-    .map(([k, v]) => `
-      <label class="checkbox-label">
-        <input type="checkbox" name="perm" value="${k}" ${selected.includes(k) ? "checked" : ""} />
-        ${v}
-      </label>
-    `).join("");
+  document.getElementById("permCheckboxes").innerHTML = Object.entries(permissionsCatalog)
+    .map(([k, v]) => `<label class="checkbox-label"><input type="checkbox" name="perm" value="${k}" ${selected.includes(k) ? "checked" : ""} /> ${v}</label>`).join("");
 }
 
 function openUserModal(user = null) {
@@ -268,7 +362,7 @@ function openUserModal(user = null) {
   document.getElementById("editUsername").disabled = !!user;
   document.getElementById("editPassword").value = "";
   document.getElementById("editPassword").required = !user;
-  document.getElementById("pwdHint").textContent = user ? "(leave blank to keep current)" : "(required for new users)";
+  document.getElementById("pwdHint").textContent = user ? "(leave blank to keep)" : "(required)";
   document.getElementById("editIsAdmin").checked = user?.is_admin || false;
   document.getElementById("editIsActive").checked = user?.is_active ?? true;
   document.getElementById("permFieldset").classList.toggle("hidden", user?.is_admin || false);
@@ -276,9 +370,7 @@ function openUserModal(user = null) {
   document.getElementById("userModal").classList.remove("hidden");
 }
 
-function closeUserModal() {
-  document.getElementById("userModal").classList.add("hidden");
-}
+function closeUserModal() { document.getElementById("userModal").classList.add("hidden"); }
 
 async function saveUser(e) {
   e.preventDefault();
@@ -291,16 +383,10 @@ async function saveUser(e) {
     is_active: document.getElementById("editIsActive").checked,
     permissions: perms,
   };
-
   const res = id
     ? await api(`/api/admin/users/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
     : await api("/api/admin/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-
-  if (!res.ok) {
-    const err = await res.json();
-    showToast(err.detail || "Failed to save user", "error");
-    return;
-  }
+  if (!res.ok) { showToast((await res.json()).detail || "Failed", "error"); return; }
   showToast("User saved");
   closeUserModal();
   loadUsers();
@@ -308,19 +394,12 @@ async function saveUser(e) {
 
 function loadBrandingForm() {
   api("/api/auth/me").then(async (res) => {
-    const data = await res.json();
-    const b = data.branding;
+    const b = (await res.json()).branding;
     document.getElementById("brandAppTitle").value = b.app_title || "";
     document.getElementById("brandTagline").value = b.app_tagline || "";
     document.getElementById("brandAccent").value = b.accent_color || "#1e8449";
     document.getElementById("brandFooter").value = b.footer_text || "";
-    const preview = document.getElementById("logoPreview");
-    if (b.logo_url) {
-      preview.src = b.logo_url + "?t=" + Date.now();
-      preview.classList.remove("hidden");
-    } else {
-      preview.classList.add("hidden");
-    }
+    applyBranding(b);
   });
 }
 
@@ -336,26 +415,18 @@ async function saveBranding(e) {
       footer_text: document.getElementById("brandFooter").value,
     }),
   });
-
   const logoFile = document.getElementById("logoFile").files[0];
   if (logoFile) {
     const fd = new FormData();
     fd.append("logo", logoFile);
     await api("/api/admin/branding/logo", { method: "POST", body: fd });
   }
-
   showToast("Branding saved");
-  const me = await (await api("/api/auth/me")).json();
-  applyBranding(me.branding);
-  if (me.branding?.logo_url) {
-    document.getElementById("logoPreview").src = me.branding.logo_url + "?t=" + Date.now();
-    document.getElementById("logoPreview").classList.remove("hidden");
-  }
+  applyBranding((await (await api("/api/auth/me")).json()).branding);
 }
 
-// --- Main actions ---
-stoThreshold.addEventListener("change", () => {
-  customSto.classList.toggle("hidden", stoThreshold.value !== "custom");
+document.getElementById("stoThreshold").addEventListener("change", () => {
+  document.getElementById("customSto").classList.toggle("hidden", document.getElementById("stoThreshold").value !== "custom");
 });
 
 document.getElementById("logoutBtn").addEventListener("click", async () => {
@@ -363,7 +434,7 @@ document.getElementById("logoutBtn").addEventListener("click", async () => {
   window.location.href = "/login";
 });
 
-clearBtn.addEventListener("click", () => {
+document.getElementById("clearBtn").addEventListener("click", () => {
   UPLOADS.forEach(({ id }) => delete files[id]);
   document.querySelectorAll(".file-drop").forEach((drop) => {
     drop.classList.remove("loaded");
@@ -371,59 +442,56 @@ clearBtn.addEventListener("click", () => {
     drop.querySelector("input").value = "";
   });
   updateRunButton();
-  showToast("All uploaded sheets cleared.");
+  showToast("Cleared");
 });
 
-historyBtn.addEventListener("click", async () => {
+document.getElementById("historyBtn").addEventListener("click", async () => {
   try {
     const res = await api("/api/history");
-    if (!res.ok) { const err = await res.json(); throw new Error(err.detail || "No history found"); }
+    if (!res.ok) throw new Error((await res.json()).detail || "No history");
     await downloadBlob(res, "Lotus_Inventory_History.xlsx");
-    showToast("History exported successfully.");
+    showToast("History exported");
   } catch (err) { showToast(err.message, "error"); }
 });
 
 async function downloadBlob(response, fallbackName) {
   const blob = await response.blob();
-  const disposition = response.headers.get("Content-Disposition") || "";
-  const match = disposition.match(/filename="(.+)"/);
-  const filename = match ? match[1] : fallbackName;
-  const url = URL.createObjectURL(blob);
+  const match = (response.headers.get("Content-Disposition") || "").match(/filename="(.+)"/);
   const a = document.createElement("a");
-  a.href = url; a.download = filename; a.click();
-  URL.revokeObjectURL(url);
+  a.href = URL.createObjectURL(blob);
+  a.download = match ? match[1] : fallbackName;
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
-runBtn.addEventListener("click", async () => {
+document.getElementById("runBtn").addEventListener("click", async () => {
   const form = new FormData();
   UPLOADS.forEach(({ id }) => { if (files[id]) form.append(id, files[id]); });
-  form.append("zero_overstock", zeroOverstock.checked ? "true" : "false");
-  let threshold = stoThreshold.value;
+  form.append("zero_overstock", document.getElementById("zeroOverstock").checked ? "true" : "false");
+  let threshold = document.getElementById("stoThreshold").value;
   if (threshold === "custom") {
-    threshold = customSto.value;
-    if (!threshold) { showToast("Please enter a custom STO threshold.", "error"); return; }
+    threshold = document.getElementById("customSto").value;
+    if (!threshold) { showToast("Enter STO threshold", "error"); return; }
   }
   form.append("sto_threshold", threshold);
-
-  progressPanel.classList.remove("hidden");
-  progressText.textContent = "Running Smart Inventory Engine...";
-  progressFill.style.width = "30%";
-  runBtn.disabled = true;
-
+  const panel = document.getElementById("progressPanel");
+  const fill = document.getElementById("progressFill");
+  panel.classList.remove("hidden");
+  document.getElementById("progressText").textContent = "Running engine...";
+  fill.style.width = "30%";
+  document.getElementById("runBtn").disabled = true;
   try {
     const res = await api("/api/process", { method: "POST", body: form });
-    progressFill.style.width = "90%";
-    if (!res.ok) { const err = await res.json(); throw new Error(err.detail || "Processing failed"); }
+    fill.style.width = "90%";
+    if (!res.ok) throw new Error((await res.json()).detail || "Failed");
     await downloadBlob(res, "Lotus_Inventory_Decision.xlsx");
-    progressFill.style.width = "100%";
-    progressText.textContent = "Done! File downloaded.";
-    showToast("Engine run successfully. Results downloaded.");
+    fill.style.width = "100%";
+    showToast("Done! File downloaded.");
   } catch (err) {
     showToast(err.message, "error");
-    progressText.textContent = "Failed.";
   } finally {
-    setTimeout(() => progressPanel.classList.add("hidden"), 1500);
-    progressFill.style.width = "0%";
+    setTimeout(() => panel.classList.add("hidden"), 1500);
+    fill.style.width = "0%";
     updateRunButton();
   }
 });

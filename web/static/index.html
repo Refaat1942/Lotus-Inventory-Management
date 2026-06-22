@@ -4,153 +4,169 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Lotus Inventory Management</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
-  <div class="app-bg">
-    <div class="orb orb-1"></div>
-    <div class="orb orb-2"></div>
-  </div>
+  <div class="app-bg"><div class="orb orb-1"></div><div class="orb orb-2"></div></div>
 
-  <div class="app">
-    <header class="header animate-in">
-      <div class="brand">
-        <div class="logo" id="brandLogo">LOTUS</div>
-        <div>
-          <h1 id="brandTitle">Lotus Inventory Management</h1>
-          <p class="version" id="brandTagline">Smart Inventory Engine</p>
+  <div class="shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-brand">
+        <div class="logo logo-xl" id="brandLogo">
+          <img id="brandLogoImg" class="hidden" alt="Logo" />
+          <span id="brandLogoText">LOTUS</span>
+        </div>
+        <div class="sidebar-titles">
+          <h1 id="brandTitle">Lotus Inventory</h1>
+          <p id="brandTagline">Smart Inventory Engine</p>
         </div>
       </div>
-      <div class="header-actions">
+
+      <nav class="sidebar-nav" id="sidebarNav"></nav>
+
+      <div class="sidebar-user">
         <span class="user-badge" id="userBadge"></span>
-        <button type="button" class="btn btn-ghost hidden" id="adminBtn">Admin Panel</button>
-        <button type="button" class="btn btn-ghost" id="logoutBtn">Logout</button>
+        <button type="button" class="btn btn-ghost btn-block" id="logoutBtn">Logout</button>
       </div>
-    </header>
+    </aside>
 
-    <section class="card animate-in delay-1" id="templatesSection">
-      <div class="card-head">
-        <h2>Download Templates</h2>
-        <span class="badge">Step 1</span>
-      </div>
-      <div class="template-grid" id="templateGrid"></div>
-    </section>
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h2 id="pageTitle">Inventory Engine</h2>
+          <p class="page-sub" id="pageSub">Follow the steps to run the smart inventory engine</p>
+        </div>
+      </header>
 
-    <section class="card animate-in delay-2" id="uploadSection">
-      <div class="card-head">
-        <h2>Upload Data Sheets</h2>
-        <span class="badge">Step 2</span>
-      </div>
-      <p class="hint">Required files are marked with *. Optional sheets enhance processing.</p>
-      <div class="upload-grid" id="uploadGrid"></div>
-    </section>
+      <!-- ENGINE VIEW -->
+      <div class="view active" id="view-engine">
+        <div class="journey">
+          <div class="journey-step active" data-step="1"><span>1</span> Templates</div>
+          <div class="journey-line"></div>
+          <div class="journey-step" data-step="2"><span>2</span> Upload</div>
+          <div class="journey-line"></div>
+          <div class="journey-step" data-step="3"><span>3</span> Settings</div>
+          <div class="journey-line"></div>
+          <div class="journey-step" data-step="4"><span>4</span> Run</div>
+        </div>
 
-    <section class="card config-card animate-in delay-3" id="configSection">
-      <div class="card-head">
-        <h2>Engine Settings</h2>
-        <span class="badge">Step 3</span>
-      </div>
-      <div class="config-row">
-        <label class="checkbox-label">
-          <input type="checkbox" id="zeroOverstock" checked />
-          Include Pos/Neg Conditions (14, 15) for Overstock
-        </label>
-      </div>
-      <div class="config-row">
-        <label for="stoThreshold">High STO Threshold (Days)</label>
-        <select id="stoThreshold">
-          <option value="90">90</option>
-          <option value="120">120</option>
-          <option value="180" selected>180</option>
-          <option value="custom">Other...</option>
-        </select>
-        <input type="number" id="customSto" class="hidden" min="0" placeholder="Enter days" />
-      </div>
-    </section>
+        <section class="card" id="templatesSection">
+          <div class="card-head"><h3>Download Templates</h3><span class="badge">Step 1</span></div>
+          <div class="template-grid" id="templateGrid"></div>
+        </section>
 
-    <section class="actions animate-in delay-4" id="actionsSection">
-      <button type="button" class="btn btn-primary btn-lg pulse-ready" id="runBtn" disabled>
-        <span class="btn-icon">⚡</span> Run Smart Inventory Engine
-      </button>
-      <button type="button" class="btn btn-secondary" id="clearBtn">Clear Uploaded Data</button>
-      <button type="button" class="btn btn-secondary" id="historyBtn">Export Pullback History</button>
-    </section>
+        <section class="card" id="uploadSection">
+          <div class="card-head"><h3>Upload Data Sheets</h3><span class="badge">Step 2</span></div>
+          <p class="hint">Required files are marked with *. Optional sheets enhance processing.</p>
+          <div class="upload-grid" id="uploadGrid"></div>
+        </section>
 
-    <div class="progress-panel hidden" id="progressPanel">
-      <p id="progressText">Processing...</p>
-      <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
-    </div>
-  </div>
+        <section class="card" id="configSection">
+          <div class="card-head"><h3>Engine Settings</h3><span class="badge">Step 3</span></div>
+          <div class="config-row">
+            <label class="checkbox-label">
+              <input type="checkbox" id="zeroOverstock" checked />
+              Include Pos/Neg Conditions (14, 15) for Overstock
+            </label>
+          </div>
+          <div class="config-row">
+            <label for="stoThreshold">High STO Threshold (Days)</label>
+            <select id="stoThreshold">
+              <option value="90">90</option>
+              <option value="120">120</option>
+              <option value="180" selected>180</option>
+              <option value="custom">Other...</option>
+            </select>
+            <input type="number" id="customSto" class="hidden" min="0" placeholder="Enter days" />
+          </div>
+        </section>
 
-  <footer class="footer" id="appFooter">Copyright © Lotus Pharmacies 2026</footer>
-
-  <!-- Admin Modal -->
-  <div class="modal-overlay hidden" id="adminModal">
-    <div class="modal">
-      <div class="modal-header">
-        <h2>Admin Panel</h2>
-        <button type="button" class="modal-close" id="closeAdmin">&times;</button>
+        <section class="card" id="actionsSection">
+          <div class="card-head"><h3>Run Engine</h3><span class="badge">Step 4</span></div>
+          <div class="actions">
+            <button type="button" class="btn btn-primary btn-lg pulse-ready" id="runBtn" disabled>
+              Run Smart Inventory Engine
+            </button>
+            <button type="button" class="btn btn-secondary" id="clearBtn">Clear Uploaded Data</button>
+            <button type="button" class="btn btn-secondary" id="historyBtn">Export Pullback History</button>
+          </div>
+          <div class="progress-panel hidden" id="progressPanel">
+            <p id="progressText">Processing...</p>
+            <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+          </div>
+        </section>
       </div>
-      <div class="modal-tabs">
-        <button type="button" class="tab active" data-tab="users">Users & Permissions</button>
-        <button type="button" class="tab" data-tab="branding">Branding & Logo</button>
+
+      <!-- REPORTS VIEW -->
+      <div class="view" id="view-reports">
+        <div class="stats-grid" id="statsGrid"></div>
+        <section class="card">
+          <div class="card-head"><h3>Recent Activity</h3></div>
+          <div class="table-wrap"><table class="data-table" id="recentActivityTable"><tbody></tbody></table></div>
+        </section>
       </div>
-      <div class="modal-body">
-        <div class="tab-panel active" id="tab-users">
-          <div class="admin-toolbar">
+
+      <!-- LOGS VIEW -->
+      <div class="view" id="view-logs">
+        <section class="card">
+          <div class="card-head"><h3>User Activity Logs</h3></div>
+          <div class="table-wrap">
+            <table class="data-table" id="logsTable">
+              <thead><tr><th>Time</th><th>User</th><th>Action</th><th>Details</th><th>IP</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <!-- USERS VIEW -->
+      <div class="view" id="view-users">
+        <section class="card">
+          <div class="card-head">
+            <h3>Users & Permissions</h3>
             <button type="button" class="btn btn-primary btn-sm" id="addUserBtn">+ Add User</button>
           </div>
           <div class="perm-legend">
-            <strong>Permission Matrix:</strong>
+            <strong>Permission Matrix — control what each user can see:</strong>
             <div id="permLegend" class="perm-grid"></div>
           </div>
           <div class="table-wrap">
             <table class="data-table" id="usersTable">
-              <thead>
-                <tr>
-                  <th>User</th>
-                  <th>Role</th>
-                  <th>Status</th>
-                  <th>Permissions</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
+              <thead><tr><th>User</th><th>Role</th><th>Status</th><th>Permissions</th><th>Actions</th></tr></thead>
               <tbody></tbody>
             </table>
           </div>
-        </div>
-        <div class="tab-panel" id="tab-branding">
+        </section>
+      </div>
+
+      <!-- BRANDING VIEW -->
+      <div class="view" id="view-branding">
+        <section class="card">
+          <div class="card-head"><h3>Branding & Logo</h3></div>
           <form id="brandingForm" class="branding-form">
-            <div class="field">
-              <label>App Title</label>
-              <input type="text" id="brandAppTitle" />
-            </div>
-            <div class="field">
-              <label>Tagline</label>
-              <input type="text" id="brandTagline" />
-            </div>
-            <div class="field">
-              <label>Accent Color</label>
-              <input type="color" id="brandAccent" />
-            </div>
-            <div class="field">
-              <label>Footer Text</label>
-              <input type="text" id="brandFooter" />
-            </div>
-            <div class="field">
-              <label>Logo Image</label>
-              <div class="logo-upload">
-                <img id="logoPreview" class="logo-preview hidden" alt="Logo preview" />
-                <input type="file" id="logoFile" accept="image/png,image/jpeg,image/webp,image/svg+xml" />
+            <div class="branding-preview-row">
+              <div class="logo logo-preview-large" id="brandingLogoPreview">
+                <img id="brandingLogoImg" class="hidden" alt="Logo preview" />
+                <span id="brandingLogoText">LOTUS</span>
               </div>
+              <p class="hint">Upload your logo — it appears in the sidebar circle above.</p>
+            </div>
+            <div class="field"><label>App Title</label><input type="text" id="brandAppTitle" /></div>
+            <div class="field"><label>Tagline</label><input type="text" id="brandTagline" /></div>
+            <div class="field"><label>Accent Color</label><input type="color" id="brandAccent" value="#1e8449" /></div>
+            <div class="field"><label>Footer Text</label><input type="text" id="brandFooter" /></div>
+            <div class="field">
+              <label>Logo Image (PNG, JPG, WEBP, SVG)</label>
+              <input type="file" id="logoFile" accept="image/png,image/jpeg,image/webp,image/svg+xml" />
             </div>
             <button type="submit" class="btn btn-primary">Save Branding</button>
           </form>
-        </div>
+        </section>
       </div>
-    </div>
+
+      <footer class="footer" id="appFooter">Copyright © Lotus Pharmacies 2026</footer>
+    </main>
   </div>
 
   <!-- User Edit Modal -->
@@ -162,26 +178,19 @@
       </div>
       <form id="userForm" class="modal-body">
         <input type="hidden" id="editUserId" />
-        <div class="field">
-          <label>Username</label>
-          <input type="text" id="editUsername" required minlength="3" />
-        </div>
+        <div class="field"><label>Username</label><input type="text" id="editUsername" required minlength="3" /></div>
         <div class="field">
           <label>Password <small id="pwdHint">(required for new users)</small></label>
           <input type="password" id="editPassword" minlength="4" />
         </div>
         <div class="field">
-          <label class="checkbox-label">
-            <input type="checkbox" id="editIsAdmin" /> Administrator (all permissions)
-          </label>
+          <label class="checkbox-label"><input type="checkbox" id="editIsAdmin" /> Administrator (all access)</label>
         </div>
         <div class="field">
-          <label class="checkbox-label">
-            <input type="checkbox" id="editIsActive" checked /> Active
-          </label>
+          <label class="checkbox-label"><input type="checkbox" id="editIsActive" checked /> Active</label>
         </div>
         <fieldset id="permFieldset">
-          <legend>Permissions</legend>
+          <legend>Visible sections for this user</legend>
           <div id="permCheckboxes" class="perm-checkboxes"></div>
         </fieldset>
         <div class="modal-actions">

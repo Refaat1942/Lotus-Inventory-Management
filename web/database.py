@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import bcrypt
 
-from config import DB_PATH, DEFAULT_ADMIN_PASS, DEFAULT_ADMIN_USER
+from config import BRANDING_DIR, DB_PATH, DEFAULT_ADMIN_PASS, DEFAULT_ADMIN_USER
 
 
 def hash_password(plain: str) -> str:
@@ -18,6 +18,8 @@ PERMISSIONS = {
     "templates": "Download Templates",
     "engine_run": "Run Inventory Engine",
     "history": "Export Pullback History",
+    "reports": "View Reports",
+    "logs": "View Activity Logs",
     "users_manage": "Manage Users & Permissions",
     "branding": "Manage Branding & Logo",
 }
@@ -34,7 +36,8 @@ DEFAULT_BRANDING = {
 def branding_with_logo() -> dict:
     branding = get_branding()
     logo = branding.get("logo_filename", "").strip()
-    branding["logo_url"] = f"/branding/{logo}" if logo else None
+    path = BRANDING_DIR / logo if logo else None
+    branding["logo_url"] = "/api/branding/logo" if path and path.exists() else None
     return branding
 
 
@@ -72,6 +75,16 @@ def init_db():
             CREATE TABLE IF NOT EXISTS branding (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS activity_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                username TEXT NOT NULL,
+                action TEXT NOT NULL,
+                details TEXT,
+                ip_address TEXT,
+                created_at TEXT NOT NULL
             );
             """
         )
@@ -221,3 +234,65 @@ def set_logo_filename(filename: str):
             "INSERT INTO branding (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             ("logo_filename", filename),
         )
+
+
+def log_activity(user_id: int | None, username: str, action: str, details: str = "", ip_address: str = ""):
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO activity_logs (user_id, username, action, details, ip_address, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, username, action, details, ip_address, datetime.now(timezone.utc).isoformat()),
+        )
+
+
+def get_activity_logs(limit: int = 300) -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM activity_logs ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_reports_summary() -> dict:
+    from engine import DB_NAME
+    import os
+
+    with get_db() as conn:
+        total_logins = conn.execute(
+            "SELECT COUNT(*) AS c FROM activity_logs WHERE action = 'login'"
+        ).fetchone()["c"]
+        total_runs = conn.execute(
+            "SELECT COUNT(*) AS c FROM activity_logs WHERE action = 'engine_run'"
+        ).fetchone()["c"]
+        total_users = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
+        active_users = conn.execute(
+            "SELECT COUNT(*) AS c FROM users WHERE is_active = 1"
+        ).fetchone()["c"]
+        recent = conn.execute(
+            "SELECT username, action, details, created_at FROM activity_logs ORDER BY id DESC LIMIT 10"
+        ).fetchall()
+
+    history_rows = 0
+    history_runs = 0
+    if os.path.exists(DB_NAME):
+        try:
+            hconn = sqlite3.connect(DB_NAME)
+            history_rows = hconn.execute(
+                "SELECT COUNT(*) FROM inventory_history"
+            ).fetchone()[0]
+            history_runs = hconn.execute(
+                "SELECT COUNT(DISTINCT Run_Date) FROM inventory_history"
+            ).fetchone()[0]
+            hconn.close()
+        except Exception:
+            pass
+
+    return {
+        "total_logins": total_logins,
+        "total_engine_runs": total_runs,
+        "total_users": total_users,
+        "active_users": active_users,
+        "history_records": history_rows,
+        "history_runs": history_runs,
+        "recent_activity": [dict(r) for r in recent],
+    }

@@ -5,8 +5,8 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -24,9 +24,13 @@ from database import (
     branding_with_logo,
     create_user,
     delete_user,
+    get_activity_logs,
+    get_branding,
+    get_reports_summary,
     get_user_by_username,
     init_db,
     list_users,
+    log_activity,
     set_logo_filename,
     update_branding,
     update_user,
@@ -80,6 +84,13 @@ class BrandingBody(BaseModel):
     footer_text: str | None = None
 
 
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else ""
+
+
 def _page(path: str) -> HTMLResponse:
     return HTMLResponse((STATIC_DIR / path).read_text(encoding="utf-8"))
 
@@ -99,12 +110,13 @@ async def index(user=Depends(get_optional_user)):
 
 
 @app.post("/api/auth/login")
-async def login(body: LoginBody):
+async def login(body: LoginBody, request: Request):
     row = get_user_by_username(body.username.strip())
     if not row or not verify_password(body.password, row["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid username or password")
     if not row["is_active"]:
         raise HTTPException(status_code=403, detail="Account is disabled")
+    log_activity(row["id"], row["username"], "login", ip_address=_client_ip(request))
     token = create_session_token(row["id"])
     response = Response(content='{"ok":true}', media_type="application/json")
     response.set_cookie(
@@ -119,7 +131,9 @@ async def login(body: LoginBody):
 
 
 @app.post("/api/auth/logout")
-async def logout():
+async def logout(request: Request, user=Depends(get_optional_user)):
+    if user:
+        log_activity(user["id"], user["username"], "logout", ip_address=_client_ip(request))
     response = Response(content='{"ok":true}', media_type="application/json")
     response.delete_cookie(COOKIE_NAME, path="/")
     return response
@@ -140,43 +154,77 @@ async def public_branding():
     return branding_with_logo()
 
 
+@app.get("/api/branding/logo")
+async def branding_logo():
+    branding = get_branding()
+    filename = branding.get("logo_filename", "").strip()
+    if not filename:
+        raise HTTPException(status_code=404, detail="No logo uploaded")
+    path = BRANDING_DIR / filename
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Logo file not found")
+    media = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".svg": "image/svg+xml",
+    }
+    return FileResponse(path, media_type=media.get(path.suffix.lower(), "application/octet-stream"))
+
+
+@app.get("/api/admin/reports")
+async def admin_reports(user=Depends(require_permission("reports"))):
+    return get_reports_summary()
+
+
+@app.get("/api/admin/logs")
+async def admin_logs(user=Depends(require_permission("logs"))):
+    return {"logs": get_activity_logs()}
+
+
 @app.get("/api/admin/users")
 async def admin_list_users(user=Depends(require_permission("users_manage"))):
     return {"users": list_users(), "permissions": PERMISSIONS}
 
 
 @app.post("/api/admin/users")
-async def admin_create_user(body: UserCreateBody, user=Depends(require_permission("users_manage"))):
+async def admin_create_user(body: UserCreateBody, request: Request, user=Depends(require_permission("users_manage"))):
     try:
         created = create_user(body.username.strip(), body.password, body.is_admin, body.permissions)
+        log_activity(user["id"], user["username"], "user_create", f"Created user: {created['username']}", _client_ip(request))
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Username already exists") from exc
     return created
 
 
 @app.put("/api/admin/users/{user_id}")
-async def admin_update_user(user_id: int, body: UserUpdateBody, user=Depends(require_permission("users_manage"))):
+async def admin_update_user(user_id: int, body: UserUpdateBody, request: Request, user=Depends(require_permission("users_manage"))):
     updated = update_user(user_id, body.password, body.is_active, body.is_admin, body.permissions)
     if not updated:
         raise HTTPException(status_code=404, detail="User not found")
+    log_activity(user["id"], user["username"], "user_update", f"Updated user id: {user_id}", _client_ip(request))
     return updated
 
 
 @app.delete("/api/admin/users/{user_id}")
-async def admin_delete_user(user_id: int, user=Depends(require_permission("users_manage"))):
+async def admin_delete_user(user_id: int, request: Request, user=Depends(require_permission("users_manage"))):
     if not delete_user(user_id, user["id"]):
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
+    log_activity(user["id"], user["username"], "user_delete", f"Deleted user id: {user_id}", _client_ip(request))
     return {"ok": True}
 
 
 @app.put("/api/admin/branding")
-async def admin_update_branding(body: BrandingBody, user=Depends(require_permission("branding"))):
+async def admin_update_branding(body: BrandingBody, request: Request, user=Depends(require_permission("branding"))):
     payload = {k: v for k, v in body.model_dump().items() if v is not None}
+    log_activity(user["id"], user["username"], "branding_update", str(payload.keys()), _client_ip(request))
     return update_branding(payload)
 
 
 @app.post("/api/admin/branding/logo")
 async def admin_upload_logo(
+    request: Request,
     logo: UploadFile = File(...),
     user=Depends(require_permission("branding")),
 ):
@@ -188,13 +236,15 @@ async def admin_upload_logo(
     with dest.open("wb") as f:
         shutil.copyfileobj(logo.file, f)
     set_logo_filename(filename)
+    log_activity(user["id"], user["username"], "logo_upload", filename, _client_ip(request))
     return branding_with_logo()
 
 
 @app.get("/api/templates/{name}")
-async def download_template(name: str, user=Depends(require_permission("templates"))):
+async def download_template(name: str, request: Request, user=Depends(require_permission("templates"))):
     if name not in TEMPLATES:
         raise HTTPException(status_code=404, detail="Template not found")
+    log_activity(user["id"], user["username"], "template_download", name, _client_ip(request))
     content = template_excel_bytes(name)
     filename = f"{name.replace('_', ' ').title()}_Template.xlsx"
     return Response(
@@ -205,10 +255,11 @@ async def download_template(name: str, user=Depends(require_permission("template
 
 
 @app.get("/api/history")
-async def download_history(user=Depends(require_permission("history"))):
+async def download_history(request: Request, user=Depends(require_permission("history"))):
     content = export_history_bytes()
     if content is None:
         raise HTTPException(status_code=404, detail="No history available")
+    log_activity(user["id"], user["username"], "history_export", ip_address=_client_ip(request))
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -225,6 +276,7 @@ async def _read_excel(upload: UploadFile | None) -> pd.DataFrame | None:
 
 @app.post("/api/process")
 async def run_engine(
+    request: Request,
     main_file: UploadFile = File(...),
     targets_file: UploadFile = File(...),
     rank_file: UploadFile = File(...),
@@ -276,6 +328,7 @@ async def run_engine(
         )
 
         filename = f"Lotus_Inventory_Decision_{datetime.now().strftime('%Y%m%d')}.xlsx"
+        log_activity(user["id"], user["username"], "engine_run", filename, _client_ip(request))
         return Response(
             content=result,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

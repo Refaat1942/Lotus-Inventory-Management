@@ -1,3 +1,18 @@
+function setLogoImage(imgEl, textEl, containerEl, url) {
+  if (!imgEl || !textEl) return;
+  if (url) {
+    imgEl.src = url + "?t=" + Date.now();
+    imgEl.classList.remove("hidden");
+    textEl.classList.add("hidden");
+    containerEl?.classList.add("has-image");
+    imgEl.onerror = () => {
+      imgEl.classList.add("hidden");
+      textEl.classList.remove("hidden");
+      containerEl?.classList.remove("has-image");
+    };
+  }
+}
+
 async function loadBranding() {
   try {
     const res = await fetch("/api/branding");
@@ -10,11 +25,12 @@ async function loadBranding() {
       document.documentElement.style.setProperty("--accent", b.accent_color);
       document.documentElement.style.setProperty("--accent-hover", b.accent_color);
     }
-    if (b.logo_url) {
-      const logo = document.getElementById("loginLogo");
-      logo.innerHTML = `<img src="${b.logo_url}?t=${Date.now()}" alt="Logo" />`;
-      logo.classList.add("has-image");
-    }
+    setLogoImage(
+      document.getElementById("loginLogoImg"),
+      document.getElementById("loginLogoText"),
+      document.getElementById("loginLogo"),
+      b.logo_url
+    );
   } catch (_) {}
 }
 
@@ -24,7 +40,6 @@ document.getElementById("loginForm").addEventListener("submit", async (e) => {
   const errEl = document.getElementById("loginError");
   errEl.classList.add("hidden");
   btn.disabled = true;
-  btn.classList.add("loading");
 
   try {
     const res = await fetch("/api/auth/login", {
@@ -40,13 +55,11 @@ document.getElementById("loginForm").addEventListener("submit", async (e) => {
       const data = await res.json().catch(() => ({}));
       throw new Error(data.detail || "Login failed");
     }
-    document.body.classList.add("login-success");
-    setTimeout(() => { window.location.href = "/"; }, 400);
+    window.location.href = "/";
   } catch (err) {
     errEl.textContent = err.message;
     errEl.classList.remove("hidden");
     btn.disabled = false;
-    btn.classList.remove("loading");
   }
 });
 
