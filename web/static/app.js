@@ -29,7 +29,6 @@ const uploadGrid = document.getElementById("uploadGrid");
 const runBtn = document.getElementById("runBtn");
 const clearBtn = document.getElementById("clearBtn");
 const historyBtn = document.getElementById("historyBtn");
-const themeToggle = document.getElementById("themeToggle");
 const stoThreshold = document.getElementById("stoThreshold");
 const customSto = document.getElementById("customSto");
 const zeroOverstock = document.getElementById("zeroOverstock");
@@ -64,7 +63,10 @@ function applyBranding(b) {
   if (b.app_title) document.getElementById("brandTitle").textContent = b.app_title;
   if (b.app_tagline) document.getElementById("brandTagline").textContent = b.app_tagline;
   if (b.footer_text) document.getElementById("appFooter").textContent = b.footer_text;
-  if (b.accent_color) document.documentElement.style.setProperty("--accent", b.accent_color);
+  if (b.accent_color) {
+    document.documentElement.style.setProperty("--accent", b.accent_color);
+    document.documentElement.style.setProperty("--accent-hover", b.accent_color);
+  }
   document.title = b.app_title || "Lotus Inventory Management";
   const logoEl = document.getElementById("brandLogo");
   if (b.logo_url) {
@@ -310,12 +312,14 @@ function loadBrandingForm() {
     const b = data.branding;
     document.getElementById("brandAppTitle").value = b.app_title || "";
     document.getElementById("brandTagline").value = b.app_tagline || "";
-    document.getElementById("brandAccent").value = b.accent_color || "#c0392b";
+    document.getElementById("brandAccent").value = b.accent_color || "#1e8449";
     document.getElementById("brandFooter").value = b.footer_text || "";
     const preview = document.getElementById("logoPreview");
-    if (data.logo_url) {
-      preview.src = data.logo_url + "?t=" + Date.now();
+    if (b.logo_url) {
+      preview.src = b.logo_url + "?t=" + Date.now();
       preview.classList.remove("hidden");
+    } else {
+      preview.classList.add("hidden");
     }
   });
 }
@@ -343,8 +347,8 @@ async function saveBranding(e) {
   showToast("Branding saved");
   const me = await (await api("/api/auth/me")).json();
   applyBranding(me.branding);
-  if (me.logo_url) {
-    document.getElementById("logoPreview").src = me.logo_url + "?t=" + Date.now();
+  if (me.branding?.logo_url) {
+    document.getElementById("logoPreview").src = me.branding.logo_url + "?t=" + Date.now();
     document.getElementById("logoPreview").classList.remove("hidden");
   }
 }
@@ -352,11 +356,6 @@ async function saveBranding(e) {
 // --- Main actions ---
 stoThreshold.addEventListener("change", () => {
   customSto.classList.toggle("hidden", stoThreshold.value !== "custom");
-});
-
-themeToggle.addEventListener("click", () => {
-  document.body.classList.toggle("light");
-  themeToggle.textContent = document.body.classList.contains("light") ? "Dark Mode" : "Light Mode";
 });
 
 document.getElementById("logoutBtn").addEventListener("click", async () => {

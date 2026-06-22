@@ -21,9 +21,9 @@ from auth import (
 from config import BRANDING_DIR, HOST, PORT
 from database import (
     PERMISSIONS,
+    branding_with_logo,
     create_user,
     delete_user,
-    get_branding,
     get_user_by_username,
     init_db,
     list_users,
@@ -127,23 +127,17 @@ async def logout():
 
 @app.get("/api/auth/me")
 async def me(user=Depends(get_current_user)):
-    branding = get_branding()
     return {
         "user": user,
         "permissions_catalog": permission_matrix(),
-        "branding": branding,
+        "branding": branding_with_logo(),
         "version": APP_VERSION,
-        "logo_url": f"/branding/{branding['logo_filename']}" if branding.get("logo_filename") else None,
     }
 
 
 @app.get("/api/branding")
 async def public_branding():
-    branding = get_branding()
-    return {
-        **branding,
-        "logo_url": f"/branding/{branding['logo_filename']}" if branding.get("logo_filename") else None,
-    }
+    return branding_with_logo()
 
 
 @app.get("/api/admin/users")
@@ -194,7 +188,7 @@ async def admin_upload_logo(
     with dest.open("wb") as f:
         shutil.copyfileobj(logo.file, f)
     set_logo_filename(filename)
-    return {"logo_url": f"/branding/{filename}"}
+    return branding_with_logo()
 
 
 @app.get("/api/templates/{name}")

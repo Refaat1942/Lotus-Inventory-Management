@@ -6,7 +6,10 @@ async function loadBranding() {
     if (b.app_title) document.getElementById("loginTitle").textContent = b.app_title;
     if (b.app_tagline) document.getElementById("loginTagline").textContent = b.app_tagline;
     if (b.footer_text) document.getElementById("loginFooter").textContent = b.footer_text;
-    if (b.accent_color) document.documentElement.style.setProperty("--accent", b.accent_color);
+    if (b.accent_color) {
+      document.documentElement.style.setProperty("--accent", b.accent_color);
+      document.documentElement.style.setProperty("--accent-hover", b.accent_color);
+    }
     if (b.logo_url) {
       const logo = document.getElementById("loginLogo");
       logo.innerHTML = `<img src="${b.logo_url}?t=${Date.now()}" alt="Logo" />`;

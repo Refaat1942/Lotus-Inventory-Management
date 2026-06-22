@@ -25,10 +25,17 @@ PERMISSIONS = {
 DEFAULT_BRANDING = {
     "app_title": "Lotus Inventory Management",
     "app_tagline": "Smart Inventory Engine",
-    "accent_color": "#c0392b",
+    "accent_color": "#1e8449",
     "footer_text": "Copyright © Lotus Pharmacies 2026",
     "logo_filename": "",
 }
+
+
+def branding_with_logo() -> dict:
+    branding = get_branding()
+    logo = branding.get("logo_filename", "").strip()
+    branding["logo_url"] = f"/branding/{logo}" if logo else None
+    return branding
 
 
 @contextmanager
@@ -205,7 +212,7 @@ def update_branding(data: dict) -> dict:
                     "INSERT INTO branding (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                     (key, str(value)),
                 )
-    return get_branding()
+    return branding_with_logo()
 
 
 def set_logo_filename(filename: str):
