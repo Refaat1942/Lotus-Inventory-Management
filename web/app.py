@@ -316,23 +316,32 @@ async def download_history(request: Request, user=Depends(require_permission("hi
     )
 
 
+def floatify_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Convert Excel nullable Int64 qty columns to float64 (skip booleans)."""
+    for col in df.columns:
+        if pd.api.types.is_bool_dtype(df[col]):
+            continue
+        if pd.api.types.is_integer_dtype(df[col]):
+            df[col] = pd.to_numeric(df[col], errors="coerce").astype(float)
+    return df
+
+
 async def _read_excel(upload: UploadFile | None) -> pd.DataFrame | None:
     if upload is None or not upload.filename:
         return None
     data = await upload.read()
     df = pd.read_excel(io.BytesIO(data))
-    for col in df.columns:
-        if pd.api.types.is_integer_dtype(df[col]):
-            df[col] = df[col].astype(float)
-    return df
+    return floatify_numeric_columns(df)
 
 
 @app.get("/api/version")
 async def api_version():
+    import replenishment_engine as repl_mod
     from engine import APP_VERSION as purchase_version
     return {
         "purchase": purchase_version,
         "replenishment": REPLENISHMENT_VERSION,
+        "replenishment_module": getattr(repl_mod, "__file__", ""),
     }
 
 

@@ -36,6 +36,15 @@ def safe_int_series(s) -> pd.Series:
     nums = pd.to_numeric(s, errors="coerce").fillna(0.0).to_numpy(dtype=float)
     return pd.Series(np.ceil(nums).astype(np.int64), index=s.index)
 
+
+def floatify_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
+    for col in df.columns:
+        if pd.api.types.is_bool_dtype(df[col]):
+            continue
+        if pd.api.types.is_integer_dtype(df[col]):
+            df[col] = pd.to_numeric(df[col], errors="coerce").astype(float)
+    return df
+
 def parse_rank_df(df_rank: pd.DataFrame) -> dict:
     rank_data = {}
     p_col = next((c for c in df_rank.columns if c.strip().lower() in ["plnt","plant","branch"]), None)
@@ -113,7 +122,7 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
 
     try:
         update_progress(0.1, "Phase 2: Loading & Standardizing Dataset...")
-        df = main_df.copy()
+        df = floatify_numeric_columns(main_df.copy())
         df = standardize_columns(df)
         plant_col = 'Plnt' if 'Plnt' in df.columns else 'Plant' 
         if 'Display' not in df.columns: df['Display'] = 0

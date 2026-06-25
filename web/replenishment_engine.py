@@ -8,7 +8,7 @@ from typing import Callable, Optional
 import numpy as np
 import pandas as pd
 
-APP_VERSION = "v2.1.0 (Web)"
+APP_VERSION = "v2.1.1 (Web)"
 DB_NAME = os.path.join(os.path.dirname(__file__), "lotus_replenishment_history.db")
 
 TEMPLATES = {
@@ -36,10 +36,12 @@ def safe_int_series(s) -> pd.Series:
 
 
 def floatify_integer_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Excel often loads qty columns as int64; mixed float math then fails on assignment."""
+    """Excel nullable Int64 columns reject fractional assignments — cast to float64."""
     for col in df.columns:
+        if pd.api.types.is_bool_dtype(df[col]):
+            continue
         if pd.api.types.is_integer_dtype(df[col]):
-            df[col] = df[col].astype(float)
+            df[col] = pd.to_numeric(df[col], errors="coerce").astype(float)
     return df
 
 
@@ -286,6 +288,7 @@ def process_replenishment(
             _progress(progress_callback, 0.5, "Running base distribution engine (Push & Pull)...")
             
             def process_material_group(group):
+                group = floatify_integer_columns(group.copy())
                 branch_group = group.drop_duplicates(subset=[plant_col]).copy()
                 
                 def evaluate_requirements(current_targets, use_display=True):
@@ -335,7 +338,7 @@ def process_replenishment(
                 
                 group['required'] = 0.0
                 group['rounded up required'] = 0.0
-                group['Final Allocated Target Days'] = group['target stock days chosen']
+                group['Final Allocated Target Days'] = group['target stock days chosen'].astype(float)
                 
                 if dc_stock <= 0:
                     return group
@@ -431,7 +434,7 @@ def process_replenishment(
                 
                 for b_name, total_rounded_need in alloc_dict.items():
                     group_mask = group[plant_col] == b_name
-                    group.loc[group_mask, 'Final Allocated Target Days'] = targets_dict.get(b_name, 0)
+                    group.loc[group_mask, 'Final Allocated Target Days'] = float(targets_dict.get(b_name, 0))
 
                     if total_rounded_need <= 0:
                         continue
