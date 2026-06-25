@@ -8,7 +8,7 @@ from typing import Callable, Optional
 import numpy as np
 import pandas as pd
 
-APP_VERSION = "v2.0.8 (Web)"
+APP_VERSION = "v2.0.9 (Web)"
 DB_NAME = os.path.join(os.path.dirname(__file__), "lotus_replenishment_history.db")
 
 TEMPLATES = {
@@ -288,7 +288,12 @@ def process_replenishment(
                     if use_display:
                         curr_tot = branch_group['Stock'] + req_updated + branch_group['Pending preparation to branch']
                         mask_disp = (branch_group['Display'] > 0) & (curr_tot < branch_group['Display'])
-                        req_updated[mask_disp] = branch_group['Display'][mask_disp] - branch_group['Stock'][mask_disp] - branch_group['Pending preparation to branch'][mask_disp]
+                        display_gap = (
+                            branch_group['Display'][mask_disp]
+                            - branch_group['Stock'][mask_disp]
+                            - branch_group['Pending preparation to branch'][mask_disp]
+                        )
+                        req_updated[mask_disp] = np.ceil(display_gap).clip(lower=0)
                     
                     req_updated[(branch_group['daily_consumption'] == 0) & (branch_group['Display'] == 0)] = 0
                     return req_updated, np.ceil(req_updated)
@@ -301,7 +306,7 @@ def process_replenishment(
                 branch_group['original_required'] = rounded_req
                 
                 group['original_raw_required'] = 0.0
-                group['original_required'] = 0
+                group['original_required'] = 0.0
                 for b_name in branch_group[plant_col]:
                     b_mask = group[plant_col] == b_name
                     orig_raw = branch_group.loc[branch_group[plant_col] == b_name, 'original_raw_required'].iloc[0]
@@ -321,7 +326,7 @@ def process_replenishment(
                 dc_stock = max(0, total_dc_stock - pending_dc)
                 
                 group['required'] = 0.0
-                group['rounded up required'] = 0
+                group['rounded up required'] = 0.0
                 group['Final Allocated Target Days'] = group['target stock days chosen']
                 
                 if dc_stock <= 0:
@@ -377,8 +382,8 @@ def process_replenishment(
                     sorted_idx = temp_group[temp_group['Unfulfilled'] > 0].sort_values(by=['daily_consumption', 'Rank'], ascending=[False, True]).index
                     for current_idx in sorted_idx:
                         if remainder <= 0: break
-                        needed = temp_group.loc[current_idx, 'Unfulfilled']
-                        taken = min(needed, remainder)
+                        needed = float(temp_group.loc[current_idx, 'Unfulfilled'])
+                        taken = int(min(needed, remainder))
                         best_rounded.loc[current_idx] += taken
                         remainder -= taken
 
@@ -398,7 +403,7 @@ def process_replenishment(
                 branch_group['required'] = raw_allocation
 
                 group['required'] = 0.0
-                group['rounded up required'] = 0
+                group['rounded up required'] = 0.0
 
                 dc_stock_dict = {}
                 for m in group['temp_mat'].unique():
@@ -420,15 +425,18 @@ def process_replenishment(
                     group_mask = group[plant_col] == b_name
                     group.loc[group_mask, 'Final Allocated Target Days'] = targets_dict.get(b_name, 0)
 
-                    if total_rounded_need <= 0: continue
+                    if total_rounded_need <= 0:
+                        continue
 
-                    remaining_to_fulfill = total_rounded_need
+                    remaining_to_fulfill = int(total_rounded_need)
                     for m_code in sorted_mats:
-                        if remaining_to_fulfill <= 0: break
-                        m_avail = dc_stock_dict.get(m_code, 0)
-                        if m_avail <= 0: continue
+                        if remaining_to_fulfill <= 0:
+                            break
+                        m_avail = int(dc_stock_dict.get(m_code, 0))
+                        if m_avail <= 0:
+                            continue
 
-                        take = min(remaining_to_fulfill, m_avail)
+                        take = int(min(remaining_to_fulfill, m_avail))
                         idx = group[(group[plant_col] == b_name) & (group['temp_mat'] == m_code)].index
 
                         group.loc[idx, 'rounded up required'] += take
@@ -446,11 +454,11 @@ def process_replenishment(
             
             _progress(progress_callback, 0.8, "Finalizing calculations & coverage...")
             
-            df['DC Capped Required'] = df['rounded up required'] 
+            df['DC Capped Required'] = safe_int_series(df['rounded up required'])
             df['rounded up required'] = safe_int_series(df['original_required'])
             df['required'] = df['original_raw_required']
             
-            df['Final Required'] = safe_int_series(df['DC Capped Required'])
+            df['Final Required'] = df['DC Capped Required']
             
             df['%req (final requirement /branch stock)'] = np.where(df['Stock'] == 0, 0.0, df['Final Required'] / df['Stock'])
             
@@ -507,6 +515,10 @@ def process_replenishment(
             
             for col in output_cols:
                 if col not in df_final.columns: df_final[col] = ""
+
+            for qty_col in ('rounded up required', 'Final Required'):
+                if qty_col in df_final.columns:
+                    df_final[qty_col] = safe_int_series(df_final[qty_col])
                     
             main_output = df_final[output_cols]
 
