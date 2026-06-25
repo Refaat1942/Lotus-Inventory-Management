@@ -320,7 +320,20 @@ async def _read_excel(upload: UploadFile | None) -> pd.DataFrame | None:
     if upload is None or not upload.filename:
         return None
     data = await upload.read()
-    return pd.read_excel(io.BytesIO(data))
+    df = pd.read_excel(io.BytesIO(data))
+    for col in df.columns:
+        if pd.api.types.is_integer_dtype(df[col]):
+            df[col] = df[col].astype(float)
+    return df
+
+
+@app.get("/api/version")
+async def api_version():
+    from engine import APP_VERSION as purchase_version
+    return {
+        "purchase": purchase_version,
+        "replenishment": REPLENISHMENT_VERSION,
+    }
 
 
 @app.post("/api/process")

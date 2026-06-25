@@ -8,7 +8,7 @@ from typing import Callable, Optional
 import numpy as np
 import pandas as pd
 
-APP_VERSION = "v2.0.9 (Web)"
+APP_VERSION = "v2.1.0 (Web)"
 DB_NAME = os.path.join(os.path.dirname(__file__), "lotus_replenishment_history.db")
 
 TEMPLATES = {
@@ -33,6 +33,14 @@ def safe_int_series(s) -> pd.Series:
         s = pd.Series(s)
     nums = pd.to_numeric(s, errors="coerce").fillna(0.0).to_numpy(dtype=float)
     return pd.Series(np.ceil(nums).astype(np.int64), index=s.index)
+
+
+def floatify_integer_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Excel often loads qty columns as int64; mixed float math then fails on assignment."""
+    for col in df.columns:
+        if pd.api.types.is_integer_dtype(df[col]):
+            df[col] = df[col].astype(float)
+    return df
 
 
 def standardize_columns(df):
@@ -164,7 +172,7 @@ def process_replenishment(
             pass
             
             _progress(progress_callback, 0.1, "Loading main dataset...")
-            df = standardize_columns(main_df.copy())
+            df = floatify_integer_columns(standardize_columns(main_df.copy()))
             df = standardize_columns(df)
             plant_col = 'Plant' if 'Plant' in df.columns else 'Plnt'
             
@@ -451,6 +459,10 @@ def process_replenishment(
 
             if 'Material' in df.columns:
                 df = df.groupby('Main_Group_Mat', group_keys=False).apply(process_material_group)
+
+            for qty_col in ('rounded up required', 'original_required', 'original_raw_required', 'required'):
+                if qty_col in df.columns:
+                    df[qty_col] = pd.to_numeric(df[qty_col], errors='coerce').fillna(0.0)
             
             _progress(progress_callback, 0.8, "Finalizing calculations & coverage...")
             

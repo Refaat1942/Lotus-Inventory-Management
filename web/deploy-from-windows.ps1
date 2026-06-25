@@ -20,7 +20,8 @@ ssh "${VpsUser}@${VpsHost}" "mkdir -p $RemoteDir"
 # Upload files (exclude cache and local db)
 $files = @(
     "app.py", "auth.py", "config.py", "database.py", "engine.py",
-    "requirements.txt", "lotus-inventory.service", "setup-vps.sh", ".env.example"
+    "replenishment_engine.py", "requirements.txt", "lotus-inventory.service",
+    "setup-vps.sh", "redeploy.sh", ".env.example"
 )
 foreach ($f in $files) {
     if (Test-Path (Join-Path $LocalWeb $f)) {
@@ -31,9 +32,22 @@ foreach ($f in $files) {
 # Upload static folder
 scp -r (Join-Path $LocalWeb "static") "${VpsUser}@${VpsHost}:${RemoteDir}/"
 
-# Run setup on VPS
-Write-Host "==> Running setup on VPS..."
-ssh "${VpsUser}@${VpsHost}" "chmod +x $RemoteDir/setup-vps.sh && bash $RemoteDir/setup-vps.sh"
+# Upload scripts folder (optional build helpers)
+if (Test-Path (Join-Path $LocalWeb "scripts")) {
+    scp -r (Join-Path $LocalWeb "scripts") "${VpsUser}@${VpsHost}:${RemoteDir}/"
+}
+
+# Run setup on VPS (first install) or quick restart (update)
+Write-Host "==> Restarting service on VPS..."
+ssh "${VpsUser}@${VpsHost}" @"
+if [ -x $RemoteDir/setup-vps.sh ] && [ ! -d $RemoteDir/venv ]; then
+  chmod +x $RemoteDir/setup-vps.sh && bash $RemoteDir/setup-vps.sh
+else
+  source $RemoteDir/venv/bin/activate && pip install -r $RemoteDir/requirements.txt -q
+  systemctl restart lotus-inventory
+  systemctl status lotus-inventory --no-pager
+fi
+"@
 
 Write-Host ""
 Write-Host "Deployed! Open: http://${VpsHost}:10000"

@@ -321,7 +321,7 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
             
         # --- ØªØ¹Ø¯ÙŠÙ„ Ø§Ù„Ù€ Purchase Ù„Ù„Ù€ Display Ø§Ù„Ø¥Ø¬Ø¨Ø§Ø±ÙŠ ---
         mask_purch_display = (F_stock + df['Purchase Quantity']) < df['Display']
-        df.loc[mask_purch_display, 'Purchase Quantity'] = df['Display'] - F_stock
+        df.loc[mask_purch_display, 'Purchase Quantity'] = np.ceil(df['Display'] - F_stock)
         df['Purchase Quantity'] = safe_int_series(df['Purchase Quantity'])
 
         update_progress(0.5, "Phase 3.5: Filtering Blocked Lists & Protecting Display...")
@@ -692,7 +692,7 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
             
         # --- ØªØ¹Ø¯ÙŠÙ„ Ø§Ù„Ù€ Distribution Ù„Ù„Ù€ Display Ø§Ù„Ø¥Ø¬Ø¨Ø§Ø±ÙŠ ---
         mask_dist_display = (df['Final Positive REQ'] > 0) & ((F_stock + df['Final Positive REQ (Distribution)']) < df['Display'])
-        df.loc[mask_dist_display, 'Final Positive REQ (Distribution)'] = df['Display'] - F_stock
+        df.loc[mask_dist_display, 'Final Positive REQ (Distribution)'] = np.ceil(df['Display'] - F_stock)
             
         df['Final Positive REQ (Distribution)'] = safe_int_series(
             df['Final Positive REQ (Distribution)'].clip(lower=0, upper=df['Final Positive REQ'])
