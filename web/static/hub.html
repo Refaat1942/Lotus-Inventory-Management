@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lotus — Choose Module</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body class="hub-body">
+  <div class="app-bg"><div class="orb orb-1"></div><div class="orb orb-2"></div></div>
+
+  <div class="hub-shell">
+    <header class="hub-header">
+      <div class="logo logo-xl" id="hubLogo">
+        <img id="hubLogoImg" class="hidden" alt="Logo" />
+        <span id="hubLogoText">LOTUS</span>
+      </div>
+      <h1 id="hubTitle">Lotus Platform</h1>
+      <p id="hubTagline">Select a module to continue</p>
+      <div class="hub-user">
+        <span id="hubUserBadge"></span>
+        <button type="button" class="btn btn-ghost btn-sm" id="hubLogoutBtn">Logout</button>
+      </div>
+    </header>
+
+    <div class="module-grid" id="moduleGrid"></div>
+
+    <p class="hub-empty hidden" id="hubEmpty">No modules are assigned to your account. Please contact an administrator.</p>
+
+    <footer class="hub-footer" id="hubFooter">Copyright © Lotus Pharmacies 2026</footer>
+  </div>
+
+  <script src="/static/branding-ui.js"></script>
+  <script src="/static/hub.js"></script>
+</body>
+</html>

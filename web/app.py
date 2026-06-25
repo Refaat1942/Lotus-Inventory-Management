@@ -17,6 +17,7 @@ from auth import (
     get_optional_user,
     permission_matrix,
     require_permission,
+    require_admin,
 )
 from config import BRANDING_DIR, HOST, PORT
 from database import (
@@ -31,6 +32,7 @@ from database import (
     init_db,
     list_users,
     log_activity,
+    resolve_logo_path,
     set_logo_filename,
     update_branding,
     update_user,
@@ -44,6 +46,17 @@ from engine import (
     parse_rank_df,
     process_inventory,
     template_excel_bytes,
+)
+from replenishment_engine import (
+    APP_VERSION as REPLENISHMENT_VERSION,
+    TEMPLATES as REPL_TEMPLATES,
+    apply_targets_excel,
+    export_history_bytes as repl_export_history_bytes,
+    extract_branches,
+    parse_blocked_df as repl_parse_blocked_df,
+    parse_rank_df as repl_parse_rank_df,
+    process_replenishment,
+    template_excel_bytes as repl_template_excel_bytes,
 )
 
 app = FastAPI(title="Lotus Inventory Management", version=APP_VERSION)
@@ -98,15 +111,49 @@ def _page(path: str) -> HTMLResponse:
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(user=Depends(get_optional_user)):
     if user:
-        return RedirectResponse("/", status_code=302)
+        return RedirectResponse("/hub", status_code=302)
     return _page("login.html")
+
+
+@app.get("/hub", response_class=HTMLResponse)
+async def hub_page(user=Depends(get_optional_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    return _page("hub.html")
+
+
+@app.get("/settings", response_class=HTMLResponse)
+async def settings_page(user=Depends(get_optional_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not user.get("is_admin"):
+        return RedirectResponse("/hub", status_code=302)
+    return _page("settings.html")
+
+
+@app.get("/purchase", response_class=HTMLResponse)
+async def purchase_page(user=Depends(get_optional_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if "purchase" not in user.get("permissions", []):
+        return RedirectResponse("/hub", status_code=302)
+    return _page("index.html")
+
+
+@app.get("/replenishment", response_class=HTMLResponse)
+async def replenishment_page(user=Depends(get_optional_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if "replenishment" not in user.get("permissions", []):
+        return RedirectResponse("/hub", status_code=302)
+    return _page("replenishment.html")
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index(user=Depends(get_optional_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    return _page("index.html")
+    return RedirectResponse("/hub", status_code=302)
 
 
 @app.post("/api/auth/login")
@@ -146,6 +193,11 @@ async def me(user=Depends(get_current_user)):
         "permissions_catalog": permission_matrix(),
         "branding": branding_with_logo(),
         "version": APP_VERSION,
+        "replenishment_version": REPLENISHMENT_VERSION,
+        "modules": {
+            "purchase": "purchase" in user.get("permissions", []),
+            "replenishment": "replenishment" in user.get("permissions", []),
+        },
     }
 
 
@@ -157,12 +209,9 @@ async def public_branding():
 @app.get("/api/branding/logo")
 async def branding_logo():
     branding = get_branding()
-    filename = branding.get("logo_filename", "").strip()
-    if not filename:
+    path = resolve_logo_path(branding.get("logo_filename", ""))
+    if not path:
         raise HTTPException(status_code=404, detail="No logo uploaded")
-    path = BRANDING_DIR / filename
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Logo file not found")
     media = {
         ".png": "image/png",
         ".jpg": "image/jpeg",
@@ -174,22 +223,22 @@ async def branding_logo():
 
 
 @app.get("/api/admin/reports")
-async def admin_reports(user=Depends(require_permission("reports"))):
+async def admin_reports(user=Depends(require_admin())):
     return get_reports_summary()
 
 
 @app.get("/api/admin/logs")
-async def admin_logs(user=Depends(require_permission("logs"))):
+async def admin_logs(user=Depends(require_admin())):
     return {"logs": get_activity_logs()}
 
 
 @app.get("/api/admin/users")
-async def admin_list_users(user=Depends(require_permission("users_manage"))):
+async def admin_list_users(user=Depends(require_admin())):
     return {"users": list_users(), "permissions": PERMISSIONS}
 
 
 @app.post("/api/admin/users")
-async def admin_create_user(body: UserCreateBody, request: Request, user=Depends(require_permission("users_manage"))):
+async def admin_create_user(body: UserCreateBody, request: Request, user=Depends(require_admin())):
     try:
         created = create_user(body.username.strip(), body.password, body.is_admin, body.permissions)
         log_activity(user["id"], user["username"], "user_create", f"Created user: {created['username']}", _client_ip(request))
@@ -199,7 +248,7 @@ async def admin_create_user(body: UserCreateBody, request: Request, user=Depends
 
 
 @app.put("/api/admin/users/{user_id}")
-async def admin_update_user(user_id: int, body: UserUpdateBody, request: Request, user=Depends(require_permission("users_manage"))):
+async def admin_update_user(user_id: int, body: UserUpdateBody, request: Request, user=Depends(require_admin())):
     updated = update_user(user_id, body.password, body.is_active, body.is_admin, body.permissions)
     if not updated:
         raise HTTPException(status_code=404, detail="User not found")
@@ -208,7 +257,7 @@ async def admin_update_user(user_id: int, body: UserUpdateBody, request: Request
 
 
 @app.delete("/api/admin/users/{user_id}")
-async def admin_delete_user(user_id: int, request: Request, user=Depends(require_permission("users_manage"))):
+async def admin_delete_user(user_id: int, request: Request, user=Depends(require_admin())):
     if not delete_user(user_id, user["id"]):
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
     log_activity(user["id"], user["username"], "user_delete", f"Deleted user id: {user_id}", _client_ip(request))
@@ -216,7 +265,7 @@ async def admin_delete_user(user_id: int, request: Request, user=Depends(require
 
 
 @app.put("/api/admin/branding")
-async def admin_update_branding(body: BrandingBody, request: Request, user=Depends(require_permission("branding"))):
+async def admin_update_branding(body: BrandingBody, request: Request, user=Depends(require_admin())):
     payload = {k: v for k, v in body.model_dump().items() if v is not None}
     log_activity(user["id"], user["username"], "branding_update", str(payload.keys()), _client_ip(request))
     return update_branding(payload)
@@ -226,7 +275,7 @@ async def admin_update_branding(body: BrandingBody, request: Request, user=Depen
 async def admin_upload_logo(
     request: Request,
     logo: UploadFile = File(...),
-    user=Depends(require_permission("branding")),
+    user=Depends(require_admin()),
 ):
     ext = Path(logo.filename or "").suffix.lower()
     if ext not in {".png", ".jpg", ".jpeg", ".webp", ".svg"}:
@@ -338,6 +387,114 @@ async def run_engine(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Processing error: {exc}") from exc
+
+
+@app.get("/api/replenishment/templates/{name}")
+async def repl_download_template(name: str, request: Request, user=Depends(require_permission("replenishment_templates"))):
+    if name not in REPL_TEMPLATES:
+        raise HTTPException(status_code=404, detail="Template not found")
+    log_activity(user["id"], user["username"], "repl_template_download", name, _client_ip(request))
+    content = repl_template_excel_bytes(name)
+    filename = f"Replenishment_{name.replace('_', ' ').title()}_Template.xlsx"
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/replenishment/branches")
+async def repl_extract_branches(
+    main_file: UploadFile = File(...),
+    user=Depends(require_permission("replenishment")),
+):
+    try:
+        main_df = await _read_excel(main_file)
+        branch_list = extract_branches(main_df)
+        return {"branches": branch_list}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/replenishment/apply-targets")
+async def repl_apply_targets(
+    main_file: UploadFile = File(...),
+    targets_file: UploadFile = File(...),
+    user=Depends(require_permission("replenishment")),
+):
+    try:
+        main_df = await _read_excel(main_file)
+        targets_df = await _read_excel(targets_file)
+        branches = extract_branches(main_df)
+        targets = apply_targets_excel(targets_df, branches)
+        return {"targets": targets}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/replenishment/process")
+async def repl_run_engine(
+    request: Request,
+    main_file: UploadFile = File(...),
+    branch_targets: str = Form(...),
+    rank_file: UploadFile | None = File(None),
+    blocked_file: UploadFile | None = File(None),
+    similar_file: UploadFile | None = File(None),
+    user=Depends(require_permission("replenishment_run")),
+):
+    import json
+
+    try:
+        targets = json.loads(branch_targets)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid branch_targets JSON") from exc
+
+    try:
+        main_df = await _read_excel(main_file)
+        rank_df = await _read_excel(rank_file)
+        rank_data = repl_parse_rank_df(rank_df) if rank_df is not None else {}
+
+        similar_df = await _read_excel(similar_file)
+
+        blocked_items, blocked_branches = set(), set()
+        if blocked_file and blocked_file.filename:
+            blocked_df = await _read_excel(blocked_file)
+            if blocked_df is not None:
+                blocked_items, blocked_branches = repl_parse_blocked_df(blocked_df)
+
+        result = process_replenishment(
+            main_df=main_df,
+            branch_targets=targets,
+            rank_data=rank_data,
+            blocked_items=blocked_items,
+            blocked_branches=blocked_branches,
+            similar_df=similar_df,
+        )
+
+        filename = f"Replenishment_{datetime.now().strftime('%Y%m%d')}.xlsx"
+        log_activity(user["id"], user["username"], "replenishment_run", filename, _client_ip(request))
+        return Response(
+            content=result,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Processing error: {exc}") from exc
+
+
+@app.get("/api/replenishment/history")
+async def repl_download_history(request: Request, user=Depends(require_permission("replenishment_history"))):
+    content = repl_export_history_bytes()
+    if content is None:
+        raise HTTPException(status_code=404, detail="No history available")
+    log_activity(user["id"], user["username"], "repl_history_export", ip_address=_client_ip(request))
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="Lotus_Replenishment_History.xlsx"'},
+    )
 
 
 if __name__ == "__main__":

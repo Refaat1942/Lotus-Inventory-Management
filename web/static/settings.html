@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lotus — Settings</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="app-bg"><div class="orb orb-1"></div><div class="orb orb-2"></div></div>
+
+  <div class="shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-brand">
+        <div class="logo logo-xl" id="brandLogo">
+          <img id="brandLogoImg" class="hidden" alt="Logo" />
+          <span id="brandLogoText">LOTUS</span>
+        </div>
+        <div class="sidebar-titles">
+          <h1 id="brandTitle">Settings</h1>
+          <p id="brandTagline">Administration</p>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav" id="sidebarNav"></nav>
+
+      <div class="sidebar-user">
+        <span class="user-badge" id="userBadge"></span>
+        <button type="button" class="btn btn-ghost btn-block" id="logoutBtn">Logout</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h2 id="pageTitle">Users &amp; Permissions</h2>
+          <p class="page-sub" id="pageSub">Manage users, module access, and platform branding</p>
+        </div>
+      </header>
+
+      <div class="view active" id="view-users">
+        <section class="card">
+          <div class="card-head">
+            <h3>Users &amp; Module Permissions</h3>
+            <button type="button" class="btn btn-primary btn-sm" id="addUserBtn">+ Add User</button>
+          </div>
+          <p class="hint">Control who can access Purchase and Replenishment, and which features each user can use. Admins have full access automatically.</p>
+          <div class="table-wrap">
+            <table class="data-table" id="usersTable">
+              <thead>
+                <tr>
+                  <th>User</th>
+                  <th>Role</th>
+                  <th>Status</th>
+                  <th>Purchase</th>
+                  <th>Replenishment</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <div class="view hidden" id="view-reports">
+        <div class="stats-grid" id="statsGrid"></div>
+        <section class="card">
+          <div class="card-head"><h3>Recent Activity</h3></div>
+          <div class="table-wrap"><table class="data-table" id="recentActivityTable"><tbody></tbody></table></div>
+        </section>
+      </div>
+
+      <div class="view hidden" id="view-logs">
+        <section class="card">
+          <div class="card-head"><h3>Activity Logs</h3></div>
+          <div class="table-wrap">
+            <table class="data-table" id="logsTable">
+              <thead><tr><th>Time</th><th>User</th><th>Action</th><th>Details</th><th>IP</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <div class="view hidden" id="view-branding">
+        <section class="card">
+          <div class="card-head"><h3>Platform Branding</h3></div>
+          <form id="brandingForm" class="branding-form">
+            <div class="branding-preview-row">
+              <div class="logo logo-preview-large" id="brandingLogoPreview">
+                <img id="brandingLogoImg" class="hidden" alt="Logo preview" />
+                <span id="brandingLogoText">LOTUS</span>
+              </div>
+              <p class="hint">Logo and colors apply to Login, Hub, Purchase, and Replenishment.</p>
+            </div>
+            <div class="field"><label>App Title</label><input type="text" id="brandAppTitle" /></div>
+            <div class="field"><label>Tagline</label><input type="text" id="brandTagline" /></div>
+            <div class="field"><label>Accent Color</label><input type="color" id="brandAccent" value="#1e8449" /></div>
+            <div class="field"><label>Footer Text</label><input type="text" id="brandFooter" /></div>
+            <div class="field">
+              <label>Logo Image (PNG, JPG, WEBP, SVG)</label>
+              <input type="file" id="logoFile" accept="image/png,image/jpeg,image/webp,image/svg+xml" />
+            </div>
+            <button type="submit" class="btn btn-primary">Save Branding</button>
+          </form>
+        </section>
+      </div>
+
+      <footer class="footer" id="appFooter">Copyright © Lotus Pharmacies 2026</footer>
+    </main>
+  </div>
+
+  <div class="modal-overlay hidden" id="userModal">
+    <div class="modal modal-lg">
+      <div class="modal-header">
+        <h2 id="userModalTitle">Add User</h2>
+        <button type="button" class="modal-close" id="closeUserModal">&times;</button>
+      </div>
+      <form id="userForm" class="modal-body">
+        <input type="hidden" id="editUserId" />
+        <div class="user-modal-grid">
+          <div class="field"><label>Username</label><input type="text" id="editUsername" required minlength="3" /></div>
+          <div class="field">
+            <label>Password <small id="pwdHint">(required for new users)</small></label>
+            <input type="password" id="editPassword" minlength="4" />
+          </div>
+        </div>
+        <div class="field">
+          <label class="checkbox-label"><input type="checkbox" id="editIsAdmin" /> Administrator (full access to all modules &amp; settings)</label>
+        </div>
+        <div class="field">
+          <label class="checkbox-label"><input type="checkbox" id="editIsActive" checked /> Account active (uncheck to block login)</label>
+        </div>
+
+        <fieldset id="permFieldset">
+          <legend>Module access &amp; features</legend>
+          <div class="module-tabs" id="permModuleTabs">
+            <button type="button" class="module-tab active" data-tab="purchase">Purchase Module</button>
+            <button type="button" class="module-tab" data-tab="replenishment">Replenishment Module</button>
+          </div>
+          <div id="permTabPanels"></div>
+        </fieldset>
+
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" id="cancelUser">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save User</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="toast hidden" id="toast"></div>
+  <script src="/static/branding-ui.js"></script>
+  <script src="/static/admin-ui.js"></script>
+  <script src="/static/settings.js"></script>
+</body>
+</html>

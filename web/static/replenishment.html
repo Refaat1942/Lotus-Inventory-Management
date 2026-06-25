@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Lotus Inventory Management</title>
+  <title>Lotus Replenishment</title>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
@@ -18,8 +18,8 @@
           <span id="brandLogoText">LOTUS</span>
         </div>
         <div class="sidebar-titles">
-          <h1 id="brandTitle">Lotus Inventory</h1>
-          <p id="brandTagline">Smart Inventory Engine</p>
+          <h1 id="brandTitle">Replenishment</h1>
+          <p id="brandTagline">Branch Replenishment Engine</p>
         </div>
       </div>
 
@@ -34,51 +34,43 @@
     <main class="main">
       <header class="topbar">
         <div>
-          <h2 id="pageTitle">Inventory Engine</h2>
-          <p class="page-sub" id="pageSub">Follow the steps to run the smart inventory engine</p>
+          <h2 id="pageTitle">Replenishment Engine</h2>
+          <p class="page-sub" id="pageSub">Follow the steps to run the replenishment engine</p>
         </div>
       </header>
 
-      <!-- ENGINE VIEW -->
+      <!-- ENGINE -->
       <div class="view active" id="view-engine">
         <div class="journey">
           <div class="journey-step active" data-step="1"><span>1</span> Templates</div>
           <div class="journey-line"></div>
           <div class="journey-step" data-step="2"><span>2</span> Upload</div>
           <div class="journey-line"></div>
-          <div class="journey-step" data-step="3"><span>3</span> Configure</div>
+          <div class="journey-step" data-step="3"><span>3</span> Branch Settings</div>
           <div class="journey-line"></div>
           <div class="journey-step" data-step="4"><span>4</span> Run</div>
         </div>
 
         <section class="card" id="templatesSection">
           <div class="card-head"><h3>Download Templates</h3><span class="badge">Step 1</span></div>
+          <p class="hint">Download blank Excel templates before filling your data.</p>
           <div class="template-grid" id="templateGrid"></div>
         </section>
 
         <section class="card" id="uploadSection">
           <div class="card-head"><h3>Upload Data Sheets</h3><span class="badge">Step 2</span></div>
-          <p class="hint">Required files are marked with *. Optional sheets enhance processing.</p>
+          <p class="hint">Main Dataset is required. Upload Targets, Rank, Blocked, and Similar as needed.</p>
           <div class="upload-grid" id="uploadGrid"></div>
         </section>
 
-        <section class="card" id="configSection">
-          <div class="card-head"><h3>Engine Settings</h3><span class="badge">Step 3</span></div>
-          <div class="config-row">
-            <label class="checkbox-label">
-              <input type="checkbox" id="zeroOverstock" checked />
-              Include Pos/Neg Conditions (14, 15) for Overstock
-            </label>
-          </div>
-          <div class="config-row">
-            <label for="stoThreshold">High STO Threshold (Days)</label>
-            <select id="stoThreshold">
-              <option value="90">90</option>
-              <option value="120">120</option>
-              <option value="180" selected>180</option>
-              <option value="custom">Other...</option>
-            </select>
-            <input type="number" id="customSto" class="hidden" min="0" placeholder="Enter days" />
+        <section class="card hidden" id="branchSection">
+          <div class="card-head"><h3>Branch Configuration</h3><span class="badge">Step 3</span></div>
+          <p class="hint">Set Pharma and Non-Pharma target days per branch. Targets Excel (step 2) can auto-fill these values.</p>
+          <div class="branch-table-wrap">
+            <table class="data-table" id="branchTable">
+              <thead><tr><th>Branch Name</th><th>Pharma (Days)</th><th>Non-Pharma (Days)</th></tr></thead>
+              <tbody id="branchBody"></tbody>
+            </table>
           </div>
         </section>
 
@@ -86,10 +78,10 @@
           <div class="card-head"><h3>Run Engine</h3><span class="badge">Step 4</span></div>
           <div class="actions">
             <button type="button" class="btn btn-primary btn-lg pulse-ready" id="runBtn" disabled>
-              Run Smart Inventory Engine
+              Calculate &amp; Export Results
             </button>
             <button type="button" class="btn btn-secondary" id="clearBtn">Clear Uploaded Data</button>
-            <button type="button" class="btn btn-secondary" id="historyBtn">Export Pullback History</button>
+            <button type="button" class="btn btn-secondary hidden" id="historyBtn">Export Orders History</button>
           </div>
           <div class="progress-panel hidden" id="progressPanel">
             <p id="progressText">Processing...</p>
@@ -105,6 +97,6 @@
   <div class="toast hidden" id="toast"></div>
   <script src="/static/branding-ui.js"></script>
   <script src="/static/file-upload.js"></script>
-  <script src="/static/app.js"></script>
+  <script src="/static/replenishment.js"></script>
 </body>
 </html>

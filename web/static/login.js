@@ -1,18 +1,3 @@
-function setLogoImage(imgEl, textEl, containerEl, url) {
-  if (!imgEl || !textEl) return;
-  if (url) {
-    imgEl.src = url + "?t=" + Date.now();
-    imgEl.classList.remove("hidden");
-    textEl.classList.add("hidden");
-    containerEl?.classList.add("has-image");
-    imgEl.onerror = () => {
-      imgEl.classList.add("hidden");
-      textEl.classList.remove("hidden");
-      containerEl?.classList.remove("has-image");
-    };
-  }
-}
-
 async function loadBranding() {
   try {
     const res = await fetch("/api/branding");
@@ -21,10 +6,7 @@ async function loadBranding() {
     if (b.app_title) document.getElementById("loginTitle").textContent = b.app_title;
     if (b.app_tagline) document.getElementById("loginTagline").textContent = b.app_tagline;
     if (b.footer_text) document.getElementById("loginFooter").textContent = b.footer_text;
-    if (b.accent_color) {
-      document.documentElement.style.setProperty("--accent", b.accent_color);
-      document.documentElement.style.setProperty("--accent-hover", b.accent_color);
-    }
+    applyAccentColor(b.accent_color);
     setLogoImage(
       document.getElementById("loginLogoImg"),
       document.getElementById("loginLogoText"),
@@ -55,7 +37,7 @@ document.getElementById("loginForm").addEventListener("submit", async (e) => {
       const data = await res.json().catch(() => ({}));
       throw new Error(data.detail || "Login failed");
     }
-    window.location.href = "/";
+    window.location.href = "/hub";
   } catch (err) {
     errEl.textContent = err.message;
     errEl.classList.remove("hidden");

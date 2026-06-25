@@ -28,6 +28,14 @@ def template_excel_bytes(name: str) -> bytes:
     buf.seek(0)
     return buf.getvalue()
 
+
+def safe_int_series(s) -> pd.Series:
+    """Ceiling float values to int — avoids pandas 'Invalid value for dtype int64' errors."""
+    if not isinstance(s, pd.Series):
+        s = pd.Series(s)
+    nums = pd.to_numeric(s, errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    return pd.Series(np.ceil(nums).astype(np.int64), index=s.index)
+
 def parse_rank_df(df_rank: pd.DataFrame) -> dict:
     rank_data = {}
     p_col = next((c for c in df_rank.columns if c.strip().lower() in ["plnt","plant","branch"]), None)
@@ -286,12 +294,14 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
             
         S_target = df['Target Days']
         df['Calculated POS REQ'] = (df['Daily Consumption'] * S_target) - Total_Stock
-        df['Final Positive REQ'] = np.where(df['Calculated POS REQ'] > 0, np.ceil(df['Calculated POS REQ']), 0).astype(int)
+        df['Final Positive REQ'] = safe_int_series(
+            np.where(df['Calculated POS REQ'] > 0, np.ceil(df['Calculated POS REQ']), 0)
+        )
 
         # Ø§Ù„Ù€ Positive REQ Ø¨ÙŠØ¨Øµ Ø¹Ù„Ù‰ Ø§Ù„Ù€ Display
         mask_pos_display = (F_stock + df['Final Positive REQ']) < df['Display']
-        df.loc[mask_pos_display, 'Final Positive REQ'] = df['Display'] - F_stock
-        df['Final Positive REQ'] = df['Final Positive REQ'].clip(lower=0).astype(int)
+        df.loc[mask_pos_display, 'Final Positive REQ'] = np.ceil(df['Display'] - F_stock)
+        df['Final Positive REQ'] = safe_int_series(df['Final Positive REQ'])
 
         OS_target = df['Overstock Target Days']
         df['Required Safe Stock'] = df['Daily Consumption'] * OS_target
@@ -301,16 +311,18 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
         df['Overstock QTY'] = abs(df['Final Negative REQ'])
 
         # -- Purchase Calculation (Branch Level) --
-        df['Purchase Quantity'] = np.where(
-            (df['Daily Consumption'] * df['Purchase Target Days']) - Total_Stock > 0,
-            np.ceil((df['Daily Consumption'] * df['Purchase Target Days']) - Total_Stock),
-            0
-        ).astype(int)
+        df['Purchase Quantity'] = safe_int_series(
+            np.where(
+                (df['Daily Consumption'] * df['Purchase Target Days']) - Total_Stock > 0,
+                np.ceil((df['Daily Consumption'] * df['Purchase Target Days']) - Total_Stock),
+                0,
+            )
+        )
             
         # --- ØªØ¹Ø¯ÙŠÙ„ Ø§Ù„Ù€ Purchase Ù„Ù„Ù€ Display Ø§Ù„Ø¥Ø¬Ø¨Ø§Ø±ÙŠ ---
         mask_purch_display = (F_stock + df['Purchase Quantity']) < df['Display']
         df.loc[mask_purch_display, 'Purchase Quantity'] = df['Display'] - F_stock
-        df['Purchase Quantity'] = df['Purchase Quantity'].clip(lower=0).astype(int)
+        df['Purchase Quantity'] = safe_int_series(df['Purchase Quantity'])
 
         update_progress(0.5, "Phase 3.5: Filtering Blocked Lists & Protecting Display...")
         if blocked_items:
@@ -345,7 +357,7 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
         mask_display = (F_stock - df['Overstock QTY']) < df['Display']
         df.loc[mask_display & (df['Overstock QTY'] > 0) & (df['Action Status'] == 'Pending'), 'Action Status'] = 'Protected by Display Qty'
         df.loc[mask_display, 'Overstock QTY'] = F_stock - df['Display']
-        df['Overstock QTY'] = df['Overstock QTY'].clip(lower=0).astype(int)
+        df['Overstock QTY'] = safe_int_series(df['Overstock QTY'])
 
         update_progress(0.6, "Calculating Company Totals & Applying Pos/Neg Rules...")
             
@@ -682,7 +694,9 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
         mask_dist_display = (df['Final Positive REQ'] > 0) & ((F_stock + df['Final Positive REQ (Distribution)']) < df['Display'])
         df.loc[mask_dist_display, 'Final Positive REQ (Distribution)'] = df['Display'] - F_stock
             
-        df['Final Positive REQ (Distribution)'] = df['Final Positive REQ (Distribution)'].clip(lower=0, upper=df['Final Positive REQ']).astype(int)
+        df['Final Positive REQ (Distribution)'] = safe_int_series(
+            df['Final Positive REQ (Distribution)'].clip(lower=0, upper=df['Final Positive REQ'])
+        )
 
         materials_to_reallocate = df[df['Realloc_Available'] > 0]['Material'].unique()
 
@@ -780,7 +794,7 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
             pulled_totals = df.groupby('Material')['Final Pullback QTY'].sum().reset_index()
             pulled_totals.rename(columns={'Final Pullback QTY': 'Total Pulled Overstock'}, inplace=True)
             company_totals = pd.merge(company_totals, pulled_totals, on='Material', how='left')
-            company_totals['Total Pulled Overstock'] = company_totals['Total Pulled Overstock'].fillna(0).astype(int)
+            company_totals['Total Pulled Overstock'] = safe_int_series(company_totals['Total Pulled Overstock'])
 
             company_totals['Company Purchase Quantity'] = (
                 company_totals['Total_Purchase_REQ'] 
@@ -788,7 +802,7 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
                 - company_totals['Total_Open_PO'] 
                 - (company_totals['Total Dc'] - company_totals['Pending from DC'])
             )
-            company_totals['Company Purchase Quantity'] = company_totals['Company Purchase Quantity'].clip(lower=0).astype(int)
+            company_totals['Company Purchase Quantity'] = safe_int_series(company_totals['Company Purchase Quantity'])
 
             df_purchase = company_totals[company_totals['Company Purchase Quantity'] > 0].copy()
             df_purchase['Total Branch stock'] = df_purchase['Stock'] + df_purchase['Store_Outbound']

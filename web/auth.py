@@ -44,6 +44,15 @@ async def get_optional_user(lotus_session: str | None = Cookie(default=None)) ->
     return user_to_dict(row)
 
 
+def require_admin():
+    async def checker(user: dict = Depends(get_current_user)) -> dict:
+        if not user.get("is_admin"):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Administrator access required")
+        return user
+
+    return checker
+
+
 def require_permission(permission: str):
     async def checker(user: dict = Depends(get_current_user)) -> dict:
         if permission not in user.get("permissions", []):

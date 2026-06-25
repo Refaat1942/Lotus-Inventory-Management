@@ -1,6 +1,7 @@
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 
 import bcrypt
 
@@ -15,13 +16,14 @@ def verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode(), hashed.encode())
 
 PERMISSIONS = {
-    "templates": "Download Templates",
-    "engine_run": "Run Inventory Engine",
-    "history": "Export Pullback History",
-    "reports": "View Reports",
-    "logs": "View Activity Logs",
-    "users_manage": "Manage Users & Permissions",
-    "branding": "Manage Branding & Logo",
+    "purchase": "Access Purchase Module",
+    "replenishment": "Access Replenishment Module",
+    "templates": "Purchase — Download Templates",
+    "engine_run": "Purchase — Run Engine",
+    "history": "Purchase — Export History",
+    "replenishment_templates": "Replenishment — Download Templates",
+    "replenishment_run": "Replenishment — Run Engine",
+    "replenishment_history": "Replenishment — Export History",
 }
 
 DEFAULT_BRANDING = {
@@ -35,10 +37,35 @@ DEFAULT_BRANDING = {
 
 def branding_with_logo() -> dict:
     branding = get_branding()
-    logo = branding.get("logo_filename", "").strip()
-    path = BRANDING_DIR / logo if logo else None
-    branding["logo_url"] = "/api/branding/logo" if path and path.exists() else None
+    path = resolve_logo_path(branding.get("logo_filename", ""))
+    if path:
+        branding["logo_filename"] = path.name
+        branding["logo_url"] = f"/branding/{path.name}"
+    else:
+        branding["logo_url"] = None
     return branding
+
+
+def resolve_logo_path(stored_filename: str = "") -> Path | None:
+    """Find logo on disk; repair stale/missing DB filename after redeploys."""
+    BRANDING_DIR.mkdir(parents=True, exist_ok=True)
+    name = (stored_filename or "").strip()
+    if name:
+        path = BRANDING_DIR / name
+        if path.is_file():
+            return path
+    for pattern in ("logo.png", "logo.jpg", "logo.jpeg", "logo.webp", "logo.svg"):
+        path = BRANDING_DIR / pattern
+        if path.is_file():
+            if name != path.name:
+                set_logo_filename(path.name)
+            return path
+    for path in sorted(BRANDING_DIR.glob("logo.*")):
+        if path.is_file():
+            if name != path.name:
+                set_logo_filename(path.name)
+            return path
+    return None
 
 
 @contextmanager
@@ -107,6 +134,33 @@ def init_db():
                 "INSERT OR IGNORE INTO branding (key, value) VALUES (?, ?)",
                 (key, value),
             )
+
+        # Grant module access to legacy users who had purchase features but no module flag
+        purchase_legacy = {"templates", "engine_run", "history"}
+        rows = conn.execute(
+            "SELECT DISTINCT user_id, permission FROM user_permissions"
+        ).fetchall()
+        by_user: dict[int, set[str]] = {}
+        for r in rows:
+            by_user.setdefault(r["user_id"], set()).add(r["permission"])
+        for user_id, perms in by_user.items():
+            if perms & purchase_legacy and "purchase" not in perms:
+                conn.execute(
+                    "INSERT OR IGNORE INTO user_permissions (user_id, permission) VALUES (?, ?)",
+                    (user_id, "purchase"),
+                )
+            if "replenishment" in perms:
+                for sub in ("replenishment_templates", "replenishment_run", "replenishment_history"):
+                    if sub not in perms:
+                        conn.execute(
+                            "INSERT OR IGNORE INTO user_permissions (user_id, permission) VALUES (?, ?)",
+                            (user_id, sub),
+                        )
+            if "replenishment_run" in perms and "replenishment" not in perms:
+                conn.execute(
+                    "INSERT OR IGNORE INTO user_permissions (user_id, permission) VALUES (?, ?)",
+                    (user_id, "replenishment"),
+                )
 
 
 def get_user_by_username(username: str):

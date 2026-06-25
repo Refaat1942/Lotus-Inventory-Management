@@ -1,0 +1,142 @@
+"""Lotus replenishment processing engine for web."""
+import datetime
+import io
+import os
+import sqlite3
+from typing import Callable, Optional
+
+import numpy as np
+import pandas as pd
+
+APP_VERSION = "v2.0.8 (Web)"
+DB_NAME = os.path.join(os.path.dirname(__file__), "lotus_replenishment_history.db")
+
+TEMPLATES = {
+    "main": ["Plnt", "Plant", "Material", "Material Group", "Material Description", "Branch Stock", "Pending to Branch", "Display", "Dc Stock", "Pending from DC", "Consumption90D", "Ref.Cons 30D", "Ref.Cons First 5D", "Sales Price", "Max Receipt", "Main Category", "SubCategory 1", "Storage Condition", "Manufacturer Name"],
+    "targets": ["Plnt", "Plant", "Main Category", "Target Days"],
+    "rank": ["Plnt", "Plant", "Rank"],
+    "blocked": ["Plnt", "Plant", "Material", "Material Description"],
+    "similar": ["Material ( Main)", "Material description (Main)", "Material (Similar)", "Material description (Similar)"],
+}
+
+
+def template_excel_bytes(name: str) -> bytes:
+    buf = io.BytesIO()
+    pd.DataFrame(columns=TEMPLATES[name]).to_excel(buf, index=False)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def standardize_columns(df):
+    df.columns = df.columns.astype(str).str.strip()
+    rename_map = {
+        "Branch Stock": "Stock",
+        "Pending to Branch": "Pending preparation to branch",
+        "Pending from DC": "Pending preparation from DC",
+        "Consumption90D": "Consumption last 90 days",
+        "Ref.Cons 30D": "Consumption last 30 days",
+        "Ref.Cons First 5D": "Consumption first 5 days of last month",
+        "Min PR Date": "first receiving date",
+        "MAX PR Date": "last receiving date",
+    }
+    df.rename(columns=rename_map, inplace=True)
+    return df
+
+
+def parse_rank_df(df_rank: pd.DataFrame) -> dict:
+    rank_data = {}
+    plant_cols = [c for c in df_rank.columns if c.strip().lower() in ["plnt", "plant", "branch"]]
+    if not plant_cols:
+        return rank_data
+    rank_col = next((c for c in df_rank.columns if c.strip().lower() == "rank"), None)
+    current_rank = 1
+    for _, row in df_rank.iterrows():
+        r_val = 999
+        if rank_col:
+            try:
+                r_val = int(row[rank_col])
+            except Exception:
+                r_val = 999
+        else:
+            r_val = current_rank
+            current_rank += 1
+        for p_col in plant_cols:
+            b_val = str(row[p_col]).strip()
+            if b_val and b_val != "nan":
+                rank_data[b_val] = r_val
+    return rank_data
+
+
+def parse_blocked_df(df_b: pd.DataFrame):
+    blocked_items, blocked_branches = set(), set()
+    plant_cols = [c for c in df_b.columns if c.strip().lower() in ["plnt", "plant", "branch"]]
+    m_col = next((c for c in df_b.columns if c.strip().lower() in ["material", "item code"]), None)
+    if not plant_cols:
+        return blocked_items, blocked_branches
+    for _, row in df_b.iterrows():
+        for p_col in plant_cols:
+            b = str(row[p_col]).strip()
+            if b and b != "nan":
+                if m_col:
+                    m = str(row[m_col]).replace(".0", "").strip()
+                    if m and m != "nan" and m != "":
+                        blocked_items.add((b, m))
+                    else:
+                        blocked_branches.add(b)
+                else:
+                    blocked_branches.add(b)
+    return blocked_items, blocked_branches
+
+
+def extract_branches(main_df: pd.DataFrame) -> list[str]:
+    df = standardize_columns(main_df.copy())
+    plant_col = "Plant" if "Plant" in df.columns else "Plnt"
+    if plant_col not in df.columns:
+        raise ValueError(f"Column '{plant_col}' not found in the dataset.")
+    return sorted(str(b) for b in df[plant_col].dropna().unique())
+
+
+def apply_targets_excel(df_targets: pd.DataFrame, branches: list[str]) -> dict[str, dict[str, float]]:
+    target_col = next((col for col in df_targets.columns if "target" in str(col).lower() or "days" in str(col).lower()), None)
+    cat_col = next((col for col in df_targets.columns if "category" in str(col).lower()), None)
+    if not cat_col or not target_col:
+        raise ValueError("Targets Excel must contain 'Main Category' and 'Target Days'.")
+    targets_map = {b: {"pharma": 0.0, "non_pharma": 0.0} for b in branches}
+    for _, row in df_targets.iterrows():
+        possible_plants = []
+        if "Plnt" in df_targets.columns:
+            possible_plants.append(str(row["Plnt"]).strip())
+        if "Plant" in df_targets.columns:
+            possible_plants.append(str(row["Plant"]).strip())
+        cat = str(row[cat_col]).strip().lower()
+        try:
+            target_val = float(row[target_col])
+        except Exception:
+            continue
+        matched_branch = next((p for p in possible_plants if p in targets_map), None)
+        if matched_branch:
+            if "non-pharma" in cat or "non_pharma" in cat or cat == "non pharma":
+                targets_map[matched_branch]["non_pharma"] = target_val
+            elif "pharma" in cat:
+                targets_map[matched_branch]["pharma"] = target_val
+    return targets_map
+
+
+def export_history_bytes() -> Optional[bytes]:
+    if not os.path.exists(DB_NAME):
+        return None
+    conn = sqlite3.connect(DB_NAME)
+    history_df = pd.read_sql("SELECT * FROM orders_history", conn)
+    conn.close()
+    if history_df.empty:
+        return None
+    buf = io.BytesIO()
+    history_df.to_excel(buf, index=False)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def _progress(cb, val, text):
+    if cb:
+        cb(val, text)
+
