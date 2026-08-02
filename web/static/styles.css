@@ -568,8 +568,20 @@ fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 12px; 
 .upload-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .file-label { color: var(--muted); }
 .branch-tools { margin-bottom: 16px; }
-.branch-table-wrap { overflow-x: auto; }
+.branch-table-wrap { overflow-x: auto; max-height: 420px; overflow-y: auto; }
 .branch-table-wrap input { width: 120px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
+.card-head-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: 1; min-width: 0; }
+.card-head-left h3 { margin: 0; }
+.card-head-toggle { gap: 12px; margin-bottom: 0; }
+.collapsible-card.is-collapsed .collapsible-body { display: none; }
+.collapsible-card.is-collapsed .card-head-toggle { margin-bottom: 0; }
+.collapsible-card:not(.is-collapsed) .card-head-toggle { margin-bottom: 14px; }
+.collapsible-body .hint { margin-top: 0; }
+.branch-meta { font-size: 0.85rem; color: var(--muted); font-weight: 500; }
+.btn-sm { padding: 6px 12px; font-size: 0.85rem; }
+.collapse-toggle { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; flex-shrink: 0; }
+.collapse-chevron { display: inline-block; font-size: 0.65rem; transition: transform 0.2s ease; }
+.collapsible-card:not(.is-collapsed) .collapse-chevron { transform: rotate(180deg); }
 .btn-lg { padding: 14px 20px; font-size: 1.05rem; }
 .btn-success { background: var(--success); color: #fff; border: none; }
 .btn-success:hover { filter: brightness(1.05); }

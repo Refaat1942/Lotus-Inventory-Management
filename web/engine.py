@@ -37,6 +37,20 @@ def safe_int_series(s) -> pd.Series:
     return pd.Series(np.ceil(nums).astype(np.int64), index=s.index)
 
 
+def display_branch_qty(stock, display) -> pd.Series:
+    """Branch qty needed to reach Display minimum (matches POS/Purchase display rules)."""
+    stock = pd.to_numeric(stock, errors="coerce").fillna(0)
+    display = pd.to_numeric(display, errors="coerce").fillna(0)
+    return safe_int_series(np.where(display > 0, np.maximum(0, np.ceil(display - stock)), 0))
+
+
+def apply_blocked_with_display(df, mask, stock):
+    """Blocked rows: zero REQ/purchase unless Display requires shelf quantity."""
+    qty = display_branch_qty(stock, df["Display"])
+    df.loc[mask, "Final Positive REQ"] = qty.loc[mask]
+    df.loc[mask, "Purchase Quantity"] = qty.loc[mask]
+
+
 def floatify_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
     for col in df.columns:
         if pd.api.types.is_bool_dtype(df[col]):
@@ -336,14 +350,12 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
         update_progress(0.5, "Phase 3.5: Filtering Blocked Lists & Protecting Display...")
         if blocked_items:
             mask_bi = df.set_index(['temp_p', 'temp_mat']).index.isin(blocked_items)
-            df.loc[mask_bi, 'Final Positive REQ'] = 0
-            df.loc[mask_bi, 'Purchase Quantity'] = 0
+            apply_blocked_with_display(df, mask_bi, F_stock)
             df.loc[mask_bi & (df['Action Status'] != 'Merged as Similar & Blocked'), 'Action Status'] = 'Blocked Item (User List)'
             
         if blocked_branches:
             mask_bb = df['temp_p'].isin(blocked_branches)
-            df.loc[mask_bb, 'Final Positive REQ'] = 0
-            df.loc[mask_bb, 'Purchase Quantity'] = 0
+            apply_blocked_with_display(df, mask_bb, F_stock)
             df.loc[mask_bb, 'Action Status'] = 'Blocked Branch (User List)'
                 
         df_blocked_os_output = pd.DataFrame()

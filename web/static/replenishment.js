@@ -26,6 +26,34 @@ const PAGE_META = {
 
 let currentUser = null;
 let branches = [];
+let branchSectionCollapsed = true;
+
+function updateBranchMeta() {
+  const meta = document.getElementById("branchMeta");
+  if (!meta) return;
+  if (!branches.length) {
+    meta.textContent = "";
+    return;
+  }
+  meta.textContent = `${branches.length} branch${branches.length === 1 ? "" : "es"}`;
+}
+
+function setBranchSectionCollapsed(collapsed) {
+  branchSectionCollapsed = collapsed;
+  const section = document.getElementById("branchSection");
+  const btn = document.getElementById("branchToggleBtn");
+  const label = btn?.querySelector(".collapse-toggle-label");
+  if (!section || !btn) return;
+  section.classList.toggle("is-collapsed", collapsed);
+  btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  if (label) label.textContent = collapsed ? "Show" : "Hide";
+}
+
+function setupBranchCollapse() {
+  document.getElementById("branchToggleBtn")?.addEventListener("click", () => {
+    setBranchSectionCollapsed(!branchSectionCollapsed);
+  });
+}
 const files = {};
 
 function hasPerm(key) {
@@ -195,7 +223,11 @@ function renderBranchTable(list) {
     </tr>`
     )
     .join("");
-  if (list.length) document.getElementById("branchSection").classList.remove("hidden");
+  if (list.length) {
+    document.getElementById("branchSection").classList.remove("hidden");
+    setBranchSectionCollapsed(true);
+  }
+  updateBranchMeta();
   applyPermissions();
   updateRunButton();
 }
@@ -337,7 +369,10 @@ async function initSession() {
   applyBranding(data.branding);
 
   if (canRepl("replenishment_templates")) buildTemplates();
-  if (canRepl("replenishment_run")) UPLOADS.forEach(setupUpload);
+  if (canRepl("replenishment_run")) {
+    UPLOADS.forEach(setupUpload);
+    setupBranchCollapse();
+  }
   applyPermissions();
 }
 
@@ -351,6 +386,7 @@ document.getElementById("clearBtn").addEventListener("click", () => {
   branches = [];
   document.getElementById("branchBody").innerHTML = "";
   document.getElementById("branchSection").classList.add("hidden");
+  updateBranchMeta();
   document.querySelectorAll(".file-drop").forEach((drop) => {
     drop.classList.remove("loaded");
     drop.querySelector(".filename").textContent = "No file selected";

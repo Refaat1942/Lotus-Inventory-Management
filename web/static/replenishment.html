@@ -63,14 +63,26 @@
           <div class="upload-grid" id="uploadGrid"></div>
         </section>
 
-        <section class="card hidden" id="branchSection">
-          <div class="card-head"><h3>Branch Configuration</h3><span class="badge">Step 3</span></div>
-          <p class="hint">Set Pharma and Non-Pharma target days per branch. Targets Excel (step 2) can auto-fill these values.</p>
-          <div class="branch-table-wrap">
-            <table class="data-table" id="branchTable">
-              <thead><tr><th>Branch Name</th><th>Pharma (Days)</th><th>Non-Pharma (Days)</th></tr></thead>
-              <tbody id="branchBody"></tbody>
-            </table>
+        <section class="card hidden collapsible-card is-collapsed" id="branchSection">
+          <div class="card-head card-head-toggle">
+            <div class="card-head-left">
+              <h3>Branch Configuration</h3>
+              <span class="badge">Step 3</span>
+              <span class="branch-meta" id="branchMeta"></span>
+            </div>
+            <button type="button" class="btn btn-ghost btn-sm collapse-toggle" id="branchToggleBtn" aria-expanded="false" aria-controls="branchCollapseBody">
+              <span class="collapse-toggle-label">Show</span>
+              <span class="collapse-chevron" aria-hidden="true">▼</span>
+            </button>
+          </div>
+          <div class="collapsible-body" id="branchCollapseBody">
+            <p class="hint">Set Pharma and Non-Pharma target days per branch. Targets Excel (step 2) can auto-fill these values.</p>
+            <div class="branch-table-wrap">
+              <table class="data-table" id="branchTable">
+                <thead><tr><th>Branch Name</th><th>Pharma (Days)</th><th>Non-Pharma (Days)</th></tr></thead>
+                <tbody id="branchBody"></tbody>
+              </table>
+            </div>
           </div>
         </section>
 
