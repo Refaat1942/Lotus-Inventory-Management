@@ -8,7 +8,7 @@ from typing import Callable, Optional
 import numpy as np
 import pandas as pd
 
-APP_VERSION = "v2.1.2 (Web)"
+APP_VERSION = "v2.1.3 (Web)"
 DB_NAME = os.path.join(os.path.dirname(__file__), "lotus_replenishment_history.db")
 
 TEMPLATES = {
@@ -48,17 +48,22 @@ def build_blocked_display_req(df_blocked: pd.DataFrame) -> pd.DataFrame:
     if df_blocked.empty:
         return df_blocked.copy()
     out = df_blocked.copy()
-    stock = out["Stock"] if "Stock" in out.columns else 0
-    pending = out["Pending preparation to branch"] if "Pending preparation to branch" in out.columns else 0
-    display = out["Display"] if "Display" in out.columns else 0
-    qty = display_branch_qty(stock, pending, display)
+    idx = out.index
+    stock = out["Stock"] if "Stock" in out.columns else pd.Series(0.0, index=idx)
+    pending = (
+        out["Pending preparation to branch"]
+        if "Pending preparation to branch" in out.columns
+        else pd.Series(0.0, index=idx)
+    )
+    display = out["Display"] if "Display" in out.columns else pd.Series(0.0, index=idx)
+    qty = display_branch_qty(stock, pending, display).reindex(idx, fill_value=0)
     out["Final Required"] = qty
     out["rounded up required"] = qty
     out["required"] = qty.astype(float)
     if "Item_Role" not in out.columns:
         out["Item_Role"] = "Main"
     out["_skip_dc"] = True
-    return out[qty > 0].copy()
+    return out.loc[qty > 0].copy()
 
 
 def floatify_integer_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -215,9 +220,10 @@ def process_replenishment(
                     if p_col in df.columns:
                         df['temp_p'] = df[p_col].astype(str).str.strip()
                         if blocked_items:
-                            mask = mask | df.set_index(['temp_p', 'temp_mat']).index.isin(blocked_items)
+                            item_mask = df.set_index(["temp_p", "temp_mat"]).index.isin(blocked_items)
+                            mask = mask | pd.Series(item_mask, index=df.index)
                         if blocked_branches:
-                            mask = mask | df['temp_p'].isin(blocked_branches)
+                            mask = mask | df["temp_p"].isin(blocked_branches)
                         df.drop(columns=['temp_p'], inplace=True)
                 
                 df_blocked_output = df[mask].drop(columns=['temp_mat']).copy()
@@ -225,12 +231,15 @@ def process_replenishment(
 
             df_blocked_display = build_blocked_display_req(df_blocked_output)
             if not df_blocked_output.empty:
+                idx = df_blocked_output.index
                 df_blocked_output = df_blocked_output.copy()
                 df_blocked_output["Final Required"] = display_branch_qty(
-                    df_blocked_output.get("Stock", 0),
-                    df_blocked_output.get("Pending preparation to branch", 0),
-                    df_blocked_output.get("Display", 0),
-                )
+                    df_blocked_output["Stock"] if "Stock" in df_blocked_output.columns else pd.Series(0.0, index=idx),
+                    df_blocked_output["Pending preparation to branch"]
+                    if "Pending preparation to branch" in df_blocked_output.columns
+                    else pd.Series(0.0, index=idx),
+                    df_blocked_output["Display"] if "Display" in df_blocked_output.columns else pd.Series(0.0, index=idx),
+                ).reindex(idx, fill_value=0)
 
             if df.empty and df_blocked_display.empty:
                 raise ValueError("No items left to process after filtering blocked items.")
@@ -534,6 +543,8 @@ def process_replenishment(
                 (~df['Is_Sim_Main_Pair']) & 
                 (~is_material_adjusted)
             )
+            if "_skip_dc" in df.columns:
+                mask_20pct = mask_20pct & ~df["_skip_dc"].fillna(False)
             df.loc[mask_20pct, 'Final Required'] = 0
             
             def calc_expected_coverage(row):
