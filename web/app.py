@@ -540,6 +540,7 @@ async def engine_job_status(job_id: str, user=Depends(require_permission("engine
         "progress": meta.get("progress", 0),
         "message": meta.get("message", ""),
         "error": meta.get("error"),
+        "size": meta.get("size"),
         "version": APP_VERSION,
     }
 
@@ -560,10 +561,13 @@ async def engine_job_download(
         raise HTTPException(status_code=404, detail="Result file missing")
     filename = f"Lotus_Inventory_Decision_{datetime.now().strftime('%Y%m%d')}.xlsx"
     log_activity(user["id"], user["username"], "engine_download", filename, _client_ip(request))
-    return FileResponse(
-        path,
+    content = path.read_bytes()
+    if not content:
+        raise HTTPException(status_code=500, detail="Result file is empty")
+    return Response(
+        content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename=filename,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
