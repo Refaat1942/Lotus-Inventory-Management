@@ -36,7 +36,8 @@ def _cleanup_old_jobs(max_age_sec: int = 7200) -> None:
                 pass
 
 
-def start_job(worker: Callable[[Callable], bytes]) -> str:
+def create_job() -> tuple[str, Path]:
+    """Reserve a job id and folder; caller saves uploads then launches."""
     _cleanup_old_jobs()
     job_id = uuid.uuid4().hex
     job_dir = JOBS_DIR / job_id
@@ -45,11 +46,14 @@ def start_job(worker: Callable[[Callable], bytes]) -> str:
         _jobs[job_id] = {
             "status": "queued",
             "progress": 0.0,
-            "message": "Queued",
+            "message": "Waiting for uploads",
             "error": None,
             "created": time.time(),
         }
+    return job_id, job_dir
 
+
+def launch_job(job_id: str, worker: Callable[[Callable], bytes]) -> None:
     def progress(val: float, text: str) -> None:
         with _lock:
             if job_id in _jobs:
@@ -61,6 +65,7 @@ def start_job(worker: Callable[[Callable], bytes]) -> str:
             if job_id in _jobs:
                 _jobs[job_id]["status"] = "running"
                 _jobs[job_id]["message"] = "Processing..."
+        job_dir = JOBS_DIR / job_id
         try:
             result = worker(progress)
             if not result:
@@ -71,7 +76,7 @@ def start_job(worker: Callable[[Callable], bytes]) -> str:
                 _jobs[job_id].update(
                     status="done",
                     progress=1.0,
-                    message="Complete",
+                    message="Complete — click Download Excel Result",
                     error=None,
                     size=len(result),
                 )
@@ -85,6 +90,12 @@ def start_job(worker: Callable[[Callable], bytes]) -> str:
                 )
 
     threading.Thread(target=run, daemon=True).start()
+
+
+def start_job(worker: Callable[[Callable], bytes]) -> str:
+    """Create job and launch worker (legacy helper)."""
+    job_id, _ = create_job()
+    launch_job(job_id, worker)
     return job_id
 
 

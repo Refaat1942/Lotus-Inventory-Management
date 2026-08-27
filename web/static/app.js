@@ -34,71 +34,70 @@ let currentUser = null;
 const files = {};
 let lastFinishedJobId = null;
 
+const JOB_STORAGE_KEY = "lotus_engine_job_id";
+
+function ensureDownloadButton() {
+  let btn = document.getElementById("downloadResultBtn");
+  if (!btn) {
+    const actions = document.querySelector("#actionsSection .actions");
+    if (!actions) return null;
+    btn = document.createElement("button");
+    btn.type = "button";
+    btn.id = "downloadResultBtn";
+    btn.className = "btn btn-primary btn-lg";
+    btn.textContent = "Download Excel Result";
+    actions.insertBefore(btn, actions.firstChild);
+  }
+  return btn;
+}
+
 function hideDownloadButton() {
   const btn = document.getElementById("downloadResultBtn");
   if (btn) btn.classList.add("hidden");
   lastFinishedJobId = null;
+  sessionStorage.removeItem(JOB_STORAGE_KEY);
 }
 
 function showDownloadButton(jobId) {
   lastFinishedJobId = jobId;
-  const btn = document.getElementById("downloadResultBtn");
+  sessionStorage.setItem(JOB_STORAGE_KEY, jobId);
+  const btn = ensureDownloadButton();
   if (!btn) return;
   btn.classList.remove("hidden");
+  btn.disabled = false;
+  btn.textContent = "Download Excel Result";
   btn.onclick = () => downloadEngineResult(jobId);
 }
 
-/** Direct link download — works for large files; needs user click if auto blocked. */
+/** Chrome-friendly download — opens file in new tab with session cookie. */
 function downloadViaLink(jobId) {
-  const a = document.createElement("a");
-  a.href = `/api/process/async/${jobId}/download`;
-  a.setAttribute("download", `Lotus_Inventory_Decision_${new Date().toISOString().slice(0, 10)}.xlsx`);
-  a.style.display = "none";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  window.open(`/api/process/async/${jobId}/download`, "_blank", "noopener,noreferrer");
 }
 
 async function downloadEngineResult(jobId) {
   const progressText = document.getElementById("progressText");
-  document.getElementById("progressPanel")?.classList.remove("hidden");
-  progressText.textContent = "Downloading Excel…";
-  try {
-    let size = 0;
-    try {
-      const stRes = await api(`/api/process/async/${jobId}`, { timeoutMs: 30000 });
-      if (stRes.ok) {
-        const st = await stRes.json();
-        size = st.size || 0;
-      }
-    } catch {
-      /* ignore */
-    }
-    if (size > 25 * 1024 * 1024) {
-      downloadViaLink(jobId);
-      progressText.textContent = "Large file — check your browser downloads bar.";
-      showToast("Download started — check browser downloads");
-      return;
-    }
-    const res = await api(`/api/process/async/${jobId}/download`, { timeoutMs: 900000 });
-    if (!res.ok) {
-      let detail = "Download failed";
-      try {
-        const data = await res.json();
-        detail = data.detail || detail;
-      } catch {
-        detail = await res.text() || detail;
-      }
-      throw new Error(detail);
-    }
-    await downloadBlob(res, "Lotus_Inventory_Decision.xlsx");
-    progressText.textContent = "Done! File downloaded.";
-    showToast("Excel downloaded");
-  } catch (err) {
-    downloadViaLink(jobId);
-    progressText.textContent = "Click Download Excel Result or check browser downloads.";
-    showToast(err.message || "Use Download Excel Result button", "error");
+  const panel = document.getElementById("progressPanel");
+  panel?.classList.remove("hidden");
+  progressText.textContent = "Opening download in Chrome…";
+  downloadViaLink(jobId);
+  progressText.textContent = "If no file appeared, check Chrome downloads (Ctrl+J).";
+  showToast("Download started — check Chrome downloads bar (Ctrl+J)");
+}
+
+async function pollJobUntilDone(jobId, fill, progressText) {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  for (let i = 0; i < 3600; i++) {
+    await sleep(2000);
+    const stRes = await api(`/api/process/async/${jobId}`, { timeoutMs: 120000 });
+    if (!stRes.ok) throw new Error("Lost connection while processing");
+    const st = await stRes.json();
+    const pct = Math.max(10, Math.min(98, (st.progress || 0) * 100));
+    fill.style.width = `${pct}%`;
+    progressText.textContent = st.message || st.status || "Processing…";
+    if (st.status === "done") return st;
+    if (st.status === "failed") throw new Error(st.message || st.error || "Engine failed");
   }
+  throw new Error("Processing timed out on server — contact admin");
 }
 
 function hasPerm(key) {
@@ -106,7 +105,7 @@ function hasPerm(key) {
 }
 
 async function api(url, options = {}) {
-  const res = await fetchWithTimeout(url, { credentials: "include", ...options }, options.timeoutMs || 600000);
+  const res = await fetchWithTimeout(url, { credentials: "include", ...options }, options.timeoutMs || 3600000);
   if (res.status === 401) {
     window.location.href = "/login";
     throw new Error("Session expired");
@@ -327,6 +326,41 @@ async function initSession() {
   if (hasPerm("templates")) buildTemplates();
   if (hasPerm("engine_run")) UPLOADS.forEach(setupUpload);
   applyPermissions();
+  await recoverEngineJobIfAny();
+}
+
+async function recoverEngineJobIfAny() {
+  if (!hasPerm("engine_run")) return;
+  const saved = sessionStorage.getItem(JOB_STORAGE_KEY);
+  if (!saved) return;
+  try {
+    const stRes = await api(`/api/process/async/${saved}`, { timeoutMs: 30000 });
+    if (!stRes.ok) {
+      sessionStorage.removeItem(JOB_STORAGE_KEY);
+      return;
+    }
+    const st = await stRes.json();
+    const panel = document.getElementById("progressPanel");
+    const progressText = document.getElementById("progressText");
+    if (st.status === "done") {
+      showDownloadButton(saved);
+      panel?.classList.remove("hidden");
+      progressText.textContent = "Previous run finished — click Download Excel Result.";
+      showToast("Your Excel is ready — click Download Excel Result", "success");
+    } else if (st.status === "running" || st.status === "queued") {
+      panel?.classList.remove("hidden");
+      progressText.textContent = "Resuming previous run…";
+      document.getElementById("runBtn").disabled = true;
+      const fill = document.getElementById("progressFill");
+      await pollJobUntilDone(saved, fill, progressText);
+      showDownloadButton(saved);
+      progressText.textContent = "Complete! Click Download Excel Result.";
+      showToast("Engine finished — click Download Excel Result", "success");
+      document.getElementById("runBtn").disabled = false;
+    }
+  } catch {
+    sessionStorage.removeItem(JOB_STORAGE_KEY);
+  }
 }
 
 document.getElementById("stoThreshold").addEventListener("change", () => {
@@ -402,13 +436,11 @@ document.getElementById("runBtn").addEventListener("click", async () => {
   runBtn.disabled = true;
   hideDownloadButton();
 
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
   try {
     const startRes = await api("/api/process/async", {
       method: "POST",
       body: form,
-      timeoutMs: 900000,
+      timeoutMs: 3600000,
     });
     if (!startRes.ok) {
       let detail = "Could not start engine";
@@ -421,54 +453,32 @@ document.getElementById("runBtn").addEventListener("click", async () => {
       throw new Error(detail);
     }
     const { job_id, version } = await startRes.json();
-    fill.style.width = "20%";
-    progressText.textContent = `Engine ${version || ""} running…`;
+    sessionStorage.setItem(JOB_STORAGE_KEY, job_id);
+    fill.style.width = "15%";
+    progressText.textContent = `Engine ${version || ""} started — processing…`;
 
-    let done = false;
-    for (let i = 0; i < 900; i++) {
-      await sleep(2000);
-      const stRes = await api(`/api/process/async/${job_id}`, { timeoutMs: 60000 });
-      if (!stRes.ok) throw new Error("Lost connection to server while processing");
-      const st = await stRes.json();
-      const pct = Math.max(20, Math.min(95, (st.progress || 0) * 100));
-      fill.style.width = `${pct}%`;
-      progressText.textContent = st.message || st.status || "Processing…";
-      if (st.status === "done") {
-        done = true;
-        break;
-      }
-      if (st.status === "failed") {
-        throw new Error(st.message || st.error || "Engine failed");
-      }
-    }
-    if (!done) throw new Error("Processing timed out — try again or contact admin");
+    await pollJobUntilDone(job_id, fill, progressText);
 
     fill.style.width = "100%";
-    progressText.textContent = "Complete! Downloading Excel…";
+    progressText.textContent = "Complete! Click Download Excel Result.";
     showDownloadButton(job_id);
-    showToast("Engine finished — downloading Excel…", "success");
-
-    try {
-      await downloadEngineResult(job_id);
-    } catch {
-      progressText.textContent = "Engine finished. Click Download Excel Result.";
-      showToast("Click Download Excel Result to get your file", "success");
-    }
+    showToast("Engine finished — click Download Excel Result", "success");
   } catch (err) {
+    const saved = sessionStorage.getItem(JOB_STORAGE_KEY);
     const msg = err.name === "AbortError"
-      ? "Request timed out — if engine finished, click Download Excel Result"
+      ? "Upload timed out — if processing continued, refresh page or click Download Excel Result"
       : (err.message || "Engine failed");
     progressText.textContent = msg;
-    if (lastFinishedJobId) {
-      showDownloadButton(lastFinishedJobId);
-      showToast("Engine may have finished — try Download Excel Result", "error");
+    if (saved) {
+      showDownloadButton(saved);
+      showToast("Try Download Excel Result or refresh the page", "error");
     } else {
       showToast(msg, "error");
     }
   } finally {
-    fill.style.width = lastFinishedJobId ? "100%" : "0%";
     if (!lastFinishedJobId) {
-      setTimeout(() => panel.classList.add("hidden"), 4000);
+      setTimeout(() => panel.classList.add("hidden"), 6000);
+      fill.style.width = "0%";
     }
     updateRunButton();
   }

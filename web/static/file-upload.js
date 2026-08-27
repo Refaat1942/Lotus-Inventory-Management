@@ -11,7 +11,7 @@ function formatFileSize(bytes) {
 }
 
 /** fetch with timeout — works in browsers without AbortSignal.timeout */
-function fetchWithTimeout(url, options = {}, timeoutMs = 600000) {
+function fetchWithTimeout(url, options = {}, timeoutMs = 3600000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const { signal: _ignored, ...rest } = options;

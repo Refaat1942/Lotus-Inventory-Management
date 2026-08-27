@@ -11,7 +11,7 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "v9.8.2 (Web)"
+APP_VERSION = "v9.8.3 (Web)"
 DB_NAME = os.path.join(os.path.dirname(__file__), "lotus_inventory_history.db")
 
 TEMPLATES = {

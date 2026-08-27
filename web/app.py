@@ -48,7 +48,7 @@ from engine import (
     process_inventory,
     template_excel_bytes,
 )
-from engine_jobs import get_job, get_job_file, start_job
+from engine_jobs import create_job, get_job, get_job_file, launch_job, start_job
 from replenishment_engine import (
     APP_VERSION as REPLENISHMENT_VERSION,
     TEMPLATES as REPL_TEMPLATES,
@@ -350,6 +350,69 @@ async def _read_excel(upload: UploadFile | None) -> pd.DataFrame | None:
     return floatify_numeric_columns(df)
 
 
+async def _save_upload(upload: UploadFile | None, dest: Path) -> None:
+    """Save raw upload bytes to disk (fast — no Excel parsing on the request thread)."""
+    if upload is None or not upload.filename:
+        return
+    data = await upload.read()
+    if not data:
+        raise HTTPException(status_code=400, detail=f"Empty file: {upload.filename}")
+    max_bytes = 120 * 1024 * 1024
+    if len(data) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large ({upload.filename}). Maximum size is 120 MB.",
+        )
+    dest.write_bytes(data)
+
+
+def _read_excel_path(path: Path) -> pd.DataFrame | None:
+    if not path.is_file():
+        return None
+    try:
+        df = pd.read_excel(path, engine="openpyxl")
+    except Exception as exc:
+        raise ValueError(f"Could not read Excel file '{path.name}': {exc}") from exc
+    return floatify_numeric_columns(df)
+
+
+def load_engine_inputs_from_dir(job_dir: Path) -> dict:
+    main_df = _read_excel_path(job_dir / "main.xlsx")
+    if main_df is None:
+        raise ValueError("Main ERP Sheet missing or invalid")
+
+    targets_df = _read_excel_path(job_dir / "targets.xlsx")
+    avoid_zero_df = _read_excel_path(job_dir / "avoid_zero.xlsx")
+    rank_df = _read_excel_path(job_dir / "rank.xlsx")
+    rank_data = parse_rank_df(rank_df) if rank_df is not None else {}
+
+    purchase_targets_df = _read_excel_path(job_dir / "purchase_targets.xlsx")
+    similar_df = _read_excel_path(job_dir / "similar.xlsx")
+
+    blocked_items, blocked_branches = set(), set()
+    blocked_df = _read_excel_path(job_dir / "blocked.xlsx")
+    if blocked_df is not None:
+        blocked_items, blocked_branches = parse_blocked_df(blocked_df)
+
+    blocked_os_items, blocked_os_branches = set(), set()
+    blocked_os_df = _read_excel_path(job_dir / "blocked_os.xlsx")
+    if blocked_os_df is not None:
+        blocked_os_items, blocked_os_branches = parse_blocked_df(blocked_os_df)
+
+    return {
+        "main_df": main_df,
+        "targets_df": targets_df,
+        "purchase_targets_df": purchase_targets_df,
+        "rank_data": rank_data,
+        "avoid_zero_df": avoid_zero_df,
+        "similar_df": similar_df,
+        "blocked_items": blocked_items,
+        "blocked_branches": blocked_branches,
+        "blocked_os_items": blocked_os_items,
+        "blocked_os_branches": blocked_os_branches,
+    }
+
+
 async def _load_engine_inputs(
     main_file: UploadFile,
     targets_file: UploadFile,
@@ -490,18 +553,20 @@ async def run_engine_async(
     """Start engine in background; poll /api/process/async/{job_id} then download."""
     include_zero_overstock = zero_overstock.lower() in ("true", "1", "yes", "on")
     try:
-        inputs = await _load_engine_inputs(
-            main_file,
-            targets_file,
-            rank_file,
-            avoid_zero_file,
-            purchase_targets_file,
-            blocked_file,
-            blocked_os_file,
-            similar_file,
-        )
+        job_id, job_dir = create_job()
+        await _save_upload(main_file, job_dir / "main.xlsx")
+        await _save_upload(targets_file, job_dir / "targets.xlsx")
+        await _save_upload(rank_file, job_dir / "rank.xlsx")
+        await _save_upload(avoid_zero_file, job_dir / "avoid_zero.xlsx")
+        await _save_upload(purchase_targets_file, job_dir / "purchase_targets.xlsx")
+        await _save_upload(blocked_file, job_dir / "blocked.xlsx")
+        await _save_upload(blocked_os_file, job_dir / "blocked_os.xlsx")
+        await _save_upload(similar_file, job_dir / "similar.xlsx")
 
         def worker(progress_cb):
+            progress_cb(0.02, "Reading uploaded Excel files...")
+            inputs = load_engine_inputs_from_dir(job_dir)
+            progress_cb(0.05, "Running inventory engine...")
             return process_inventory(
                 main_df=inputs["main_df"],
                 targets_df=inputs["targets_df"],
@@ -518,7 +583,7 @@ async def run_engine_async(
                 progress_callback=progress_cb,
             )
 
-        job_id = start_job(worker)
+        launch_job(job_id, worker)
         log_activity(user["id"], user["username"], "engine_run_async", job_id, _client_ip(request))
         return {"job_id": job_id, "version": APP_VERSION}
     except HTTPException:
