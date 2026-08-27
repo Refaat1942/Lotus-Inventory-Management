@@ -328,36 +328,76 @@ document.getElementById("runBtn").addEventListener("click", async () => {
   const progressText = document.getElementById("progressText");
   const runBtn = document.getElementById("runBtn");
   panel.classList.remove("hidden");
-  progressText.textContent = "Uploading and processing… large files may take several minutes.";
-  fill.style.width = "15%";
+  progressText.textContent = "Uploading files to server…";
+  fill.style.width = "10%";
   runBtn.disabled = true;
 
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
   try {
-    const res = await api("/api/process", { method: "POST", body: form, timeoutMs: 900000 });
-    fill.style.width = "85%";
-    progressText.textContent = "Preparing download…";
-    if (!res.ok) {
-      let detail = "Engine failed";
+    const startRes = await api("/api/process/async", {
+      method: "POST",
+      body: form,
+      timeoutMs: 900000,
+    });
+    if (!startRes.ok) {
+      let detail = "Could not start engine";
       try {
-        const data = await res.json();
+        const data = await startRes.json();
         detail = data.detail || detail;
       } catch {
-        detail = await res.text() || detail;
+        detail = await startRes.text() || detail;
       }
       throw new Error(detail);
     }
-    await downloadBlob(res, "Lotus_Inventory_Decision.xlsx");
+    const { job_id, version } = await startRes.json();
+    fill.style.width = "20%";
+    progressText.textContent = `Engine ${version || ""} running…`;
+
+    let done = false;
+    for (let i = 0; i < 900; i++) {
+      await sleep(2000);
+      const stRes = await api(`/api/process/async/${job_id}`, { timeoutMs: 60000 });
+      if (!stRes.ok) throw new Error("Lost connection to server while processing");
+      const st = await stRes.json();
+      const pct = Math.max(20, Math.min(95, (st.progress || 0) * 100));
+      fill.style.width = `${pct}%`;
+      progressText.textContent = st.message || st.status || "Processing…";
+      if (st.status === "done") {
+        done = true;
+        break;
+      }
+      if (st.status === "failed") {
+        throw new Error(st.message || st.error || "Engine failed");
+      }
+    }
+    if (!done) throw new Error("Processing timed out — try again or contact admin");
+
+    fill.style.width = "96%";
+    progressText.textContent = "Downloading Excel…";
+    const dlRes = await api(`/api/process/async/${job_id}/download`, { timeoutMs: 900000 });
+    if (!dlRes.ok) {
+      let detail = "Download failed";
+      try {
+        const data = await dlRes.json();
+        detail = data.detail || detail;
+      } catch {
+        detail = await dlRes.text() || detail;
+      }
+      throw new Error(detail);
+    }
+    await downloadBlob(dlRes, "Lotus_Inventory_Decision.xlsx");
     fill.style.width = "100%";
     progressText.textContent = "Done!";
     showToast("Done! File downloaded.");
   } catch (err) {
     const msg = err.name === "AbortError"
-      ? "Request timed out — try again or use a smaller file"
+      ? "Request timed out — server may still be processing; wait and try download again"
       : (err.message || "Engine failed");
     progressText.textContent = msg;
     showToast(msg, "error");
   } finally {
-    setTimeout(() => panel.classList.add("hidden"), 3000);
+    setTimeout(() => panel.classList.add("hidden"), 4000);
     fill.style.width = "0%";
     updateRunButton();
   }

@@ -19,7 +19,7 @@ ssh "${VpsUser}@${VpsHost}" "mkdir -p $RemoteDir"
 
 # Upload files (exclude cache and local db)
 $files = @(
-    "app.py", "auth.py", "config.py", "database.py", "engine.py",
+    "app.py", "auth.py", "config.py", "database.py", "engine.py", "engine_jobs.py",
     "replenishment_engine.py", "requirements.txt", "lotus-inventory.service",
     "setup-vps.sh", "redeploy.sh", ".env.example"
 )

@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 data/lotus_app.db
 data/branding/logo.*
+data/engine_jobs/

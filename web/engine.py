@@ -1,6 +1,7 @@
-"""Lotus inventory processing engine for web."""
+﻿"""Lotus inventory processing engine for web."""
 import datetime
 import io
+import logging
 import math
 import os
 import sqlite3
@@ -8,7 +9,9 @@ from typing import Callable, Optional
 import numpy as np
 import pandas as pd
 
-APP_VERSION = "v9.8.0 (Web)"
+logger = logging.getLogger(__name__)
+
+APP_VERSION = "v9.8.1 (Web)"
 DB_NAME = os.path.join(os.path.dirname(__file__), "lotus_inventory_history.db")
 
 TEMPLATES = {
@@ -166,46 +169,42 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
         if 'Days Since Last STO' not in df.columns: df['Days Since Last STO'] = 0
 
         df['is_main_item'] = False
-        # =================== SIMILAR ITEMS LOGIC ===================
         if similar_df is not None:
             update_progress(0.15, "Merging Similar Items Data...")
             sim_df = similar_df.copy()
-            # Ø¬Ù„Ø¨ Ø£Ø³Ù…Ø§Ø¡ Ø§Ù„Ø¹Ù…Ø¯Ø§Ù† Ù…Ù‡Ù…Ø§ ÙƒØ§Ù† ÙÙŠÙ‡Ø§ Ù…Ø³Ø§ÙØ§Øª
             m_main_col = next((c for c in sim_df.columns if 'main' in c.lower() and 'material' in c.lower() and 'desc' not in c.lower()), sim_df.columns[0])
             m_sim_col = next((c for c in sim_df.columns if 'similar' in c.lower() and 'material' in c.lower() and 'desc' not in c.lower()), sim_df.columns[2])
-                
-            agg_columns = ['Stock', 'Pending preparation to branch', 'Display', 
-                           'Consumption 180Day', 'Consumption 90Day', 
-                           'Consumption last 30 days', 'Consumption first 5 days of last month']
-                               
-            for _, row in sim_df.iterrows():
-                main_mat = str(row[m_main_col]).replace('.0', '').strip()
-                sim_mat = str(row[m_sim_col]).replace('.0', '').strip()
-                    
-                if main_mat and sim_mat and main_mat != 'nan' and sim_mat != 'nan':
-                    sim_mask = df['temp_mat'] == sim_mat
-                    if sim_mask.any():
-                        # Ù„Ù Ø¹Ù„Ù‰ Ø§Ù„ÙØ±ÙˆØ¹ Ø§Ù„Ù„ÙŠ ÙÙŠÙ‡Ø§ Ø§Ù„ØµÙ†Ù Ø§Ù„Ø³ÙŠÙ…ÙŠÙ„Ø§Ø±
-                        for b in df.loc[sim_mask, 'temp_p'].unique():
-                            s_b_mask = (df['temp_p'] == b) & (df['temp_mat'] == sim_mat)
-                            m_b_mask = (df['temp_p'] == b) & (df['temp_mat'] == main_mat)
-                                
-                            if m_b_mask.any():
-                                # Ø¬Ù…Ø¹ Ø§Ù„Ø£Ø±Ù‚Ø§Ù…
-                                for col in agg_columns:
-                                    if col in df.columns:
-                                        s_val = pd.to_numeric(df.loc[s_b_mask, col].values[0], errors='coerce')
-                                        s_val = 0 if pd.isna(s_val) else s_val
-                                        m_val = pd.to_numeric(df.loc[m_b_mask, col].values[0], errors='coerce')
-                                        m_val = 0 if pd.isna(m_val) else m_val
-                                        df.loc[m_b_mask, col] = m_val + s_val
-                                df.loc[m_b_mask, 'is_main_item'] = True
-                                            
-                            # Ø¥Ø¶Ø§ÙØ© Ø§Ù„Ø³ÙŠÙ…ÙŠÙ„Ø§Ø± Ù„Ù„Ø¨Ù„ÙˆÙƒØ¯ Ø§Ù„Ø¹Ø§Ø¯ÙŠ ÙˆØ§Ù„Ù€ OS Ø¹Ø´Ø§Ù† Ù…ÙŠØªØ­Ø³Ø¨Ø´ Ø®Ø§Ù„Øµ
-                            blocked_items.add((b, sim_mat))
-                            blocked_os_items.add((b, sim_mat))
-                            df.loc[s_b_mask, 'Action Status'] = 'Merged as Similar & Blocked'
-        # ==========================================================
+            agg_columns = [
+                'Stock', 'Pending preparation to branch', 'Display',
+                'Consumption 180Day', 'Consumption 90Day',
+                'Consumption last 30 days', 'Consumption first 5 days of last month',
+            ]
+            pairs = sim_df[[m_main_col, m_sim_col]].copy()
+            pairs[m_main_col] = pairs[m_main_col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+            pairs[m_sim_col] = pairs[m_sim_col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+            pairs = pairs.drop_duplicates()
+            for _, row in pairs.iterrows():
+                main_mat = row[m_main_col]
+                sim_mat = row[m_sim_col]
+                if not main_mat or main_mat == 'nan' or not sim_mat or sim_mat == 'nan':
+                    continue
+                sim_mask = df['temp_mat'] == sim_mat
+                if not sim_mask.any():
+                    continue
+                for b in df.loc[sim_mask, 'temp_p'].unique():
+                    s_b_mask = (df['temp_p'] == b) & (df['temp_mat'] == sim_mat)
+                    m_b_mask = (df['temp_p'] == b) & (df['temp_mat'] == main_mat)
+                    if m_b_mask.any():
+                        for col in agg_columns:
+                            if col in df.columns:
+                                s_val = pd.to_numeric(df.loc[s_b_mask, col], errors='coerce').fillna(0).sum()
+                                m_val = pd.to_numeric(df.loc[m_b_mask, col], errors='coerce').fillna(0).iloc[0]
+                                df.loc[m_b_mask, col] = m_val + s_val
+                        df.loc[m_b_mask, 'is_main_item'] = True
+                    blocked_items.add((b, sim_mat))
+                    blocked_os_items.add((b, sim_mat))
+                    if s_b_mask.any():
+                        df.loc[s_b_mask, 'Action Status'] = 'Merged as Similar & Blocked'
 
         update_progress(0.2, "Phase 3.1: Applying Targets & Purchase Targets...")
         df['Target Days'] = 35 
@@ -851,13 +850,23 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
             )
             pulled_totals.rename(columns={"temp_mat": "Material"}, inplace=True)
             company_totals = pd.merge(company_totals, pulled_totals, on="Material", how="left")
-            company_totals["Total Pulled Overstock"] = safe_int_series(company_totals["Total Pulled Overstock"])
+            company_totals["Total Pulled Overstock"] = safe_int_series(
+                company_totals["Total Pulled Overstock"].fillna(0)
+            )
+
+            purchase_req_col = "Total_Purchase_REQ" if "Total_Purchase_REQ" in company_totals.columns else "Total Purchase Quantity"
+            open_po_col = "Total_Open_PO" if "Total_Open_PO" in company_totals.columns else "Open PO Quantity"
+            dc_col = "Total Dc" if "Total Dc" in company_totals.columns else "Total_Dc"
+            pending_dc_col = "Pending from DC" if "Pending from DC" in company_totals.columns else "Pending from DC"
 
             company_totals["Company Purchase Quantity"] = (
-                company_totals["Total_Purchase_REQ"]
+                pd.to_numeric(company_totals[purchase_req_col], errors="coerce").fillna(0)
                 - company_totals["Total Pulled Overstock"]
-                - company_totals["Total_Open_PO"]
-                - (company_totals["Total Dc"] - company_totals["Pending from DC"])
+                - pd.to_numeric(company_totals[open_po_col], errors="coerce").fillna(0)
+                - (
+                    pd.to_numeric(company_totals[dc_col], errors="coerce").fillna(0)
+                    - pd.to_numeric(company_totals[pending_dc_col], errors="coerce").fillna(0)
+                )
             )
             company_totals["Company Purchase Quantity"] = safe_int_series(company_totals["Company Purchase Quantity"])
 

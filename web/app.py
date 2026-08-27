@@ -48,6 +48,7 @@ from engine import (
     process_inventory,
     template_excel_bytes,
 )
+from engine_jobs import get_job, get_job_file, start_job
 from replenishment_engine import (
     APP_VERSION as REPLENISHMENT_VERSION,
     TEMPLATES as REPL_TEMPLATES,
@@ -349,6 +350,51 @@ async def _read_excel(upload: UploadFile | None) -> pd.DataFrame | None:
     return floatify_numeric_columns(df)
 
 
+async def _load_engine_inputs(
+    main_file: UploadFile,
+    targets_file: UploadFile,
+    rank_file: UploadFile,
+    avoid_zero_file: UploadFile,
+    purchase_targets_file: UploadFile | None = None,
+    blocked_file: UploadFile | None = None,
+    blocked_os_file: UploadFile | None = None,
+    similar_file: UploadFile | None = None,
+):
+    main_df = await _read_excel(main_file)
+    targets_df = await _read_excel(targets_file)
+    avoid_zero_df = await _read_excel(avoid_zero_file)
+    rank_df = await _read_excel(rank_file)
+    rank_data = parse_rank_df(rank_df) if rank_df is not None else {}
+
+    purchase_targets_df = await _read_excel(purchase_targets_file)
+    similar_df = await _read_excel(similar_file)
+
+    blocked_items, blocked_branches = set(), set()
+    if blocked_file and blocked_file.filename:
+        blocked_df = await _read_excel(blocked_file)
+        if blocked_df is not None:
+            blocked_items, blocked_branches = parse_blocked_df(blocked_df)
+
+    blocked_os_items, blocked_os_branches = set(), set()
+    if blocked_os_file and blocked_os_file.filename:
+        blocked_os_df = await _read_excel(blocked_os_file)
+        if blocked_os_df is not None:
+            blocked_os_items, blocked_os_branches = parse_blocked_df(blocked_os_df)
+
+    return {
+        "main_df": main_df,
+        "targets_df": targets_df,
+        "purchase_targets_df": purchase_targets_df,
+        "rank_data": rank_data,
+        "avoid_zero_df": avoid_zero_df,
+        "similar_df": similar_df,
+        "blocked_items": blocked_items,
+        "blocked_branches": blocked_branches,
+        "blocked_os_items": blocked_os_items,
+        "blocked_os_branches": blocked_os_branches,
+    }
+
+
 @app.get("/api/version")
 async def api_version():
     import replenishment_engine as repl_mod
@@ -377,39 +423,29 @@ async def run_engine(
 ):
     include_zero_overstock = zero_overstock.lower() in ("true", "1", "yes", "on")
     try:
-        main_df = await _read_excel(main_file)
-        targets_df = await _read_excel(targets_file)
-        avoid_zero_df = await _read_excel(avoid_zero_file)
-        rank_df = await _read_excel(rank_file)
-        rank_data = parse_rank_df(rank_df) if rank_df is not None else {}
-
-        purchase_targets_df = await _read_excel(purchase_targets_file)
-        similar_df = await _read_excel(similar_file)
-
-        blocked_items, blocked_branches = set(), set()
-        if blocked_file and blocked_file.filename:
-            blocked_df = await _read_excel(blocked_file)
-            if blocked_df is not None:
-                blocked_items, blocked_branches = parse_blocked_df(blocked_df)
-
-        blocked_os_items, blocked_os_branches = set(), set()
-        if blocked_os_file and blocked_os_file.filename:
-            blocked_os_df = await _read_excel(blocked_os_file)
-            if blocked_os_df is not None:
-                blocked_os_items, blocked_os_branches = parse_blocked_df(blocked_os_df)
+        inputs = await _load_engine_inputs(
+            main_file,
+            targets_file,
+            rank_file,
+            avoid_zero_file,
+            purchase_targets_file,
+            blocked_file,
+            blocked_os_file,
+            similar_file,
+        )
 
         result = await run_in_threadpool(
             process_inventory,
-            main_df=main_df,
-            targets_df=targets_df,
-            purchase_targets_df=purchase_targets_df,
-            rank_data=rank_data,
-            avoid_zero_df=avoid_zero_df,
-            similar_df=similar_df,
-            blocked_items=blocked_items,
-            blocked_branches=blocked_branches,
-            blocked_os_items=blocked_os_items,
-            blocked_os_branches=blocked_os_branches,
+            main_df=inputs["main_df"],
+            targets_df=inputs["targets_df"],
+            purchase_targets_df=inputs["purchase_targets_df"],
+            rank_data=inputs["rank_data"],
+            avoid_zero_df=inputs["avoid_zero_df"],
+            similar_df=inputs["similar_df"],
+            blocked_items=inputs["blocked_items"],
+            blocked_branches=inputs["blocked_branches"],
+            blocked_os_items=inputs["blocked_os_items"],
+            blocked_os_branches=inputs["blocked_os_branches"],
             zero_overstock=include_zero_overstock,
             sto_threshold=sto_threshold,
         )
@@ -434,6 +470,101 @@ async def run_engine(
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Processing error: {exc}") from exc
+
+
+@app.post("/api/process/async")
+async def run_engine_async(
+    request: Request,
+    main_file: UploadFile = File(...),
+    targets_file: UploadFile = File(...),
+    rank_file: UploadFile = File(...),
+    avoid_zero_file: UploadFile = File(...),
+    purchase_targets_file: UploadFile | None = File(None),
+    blocked_file: UploadFile | None = File(None),
+    blocked_os_file: UploadFile | None = File(None),
+    similar_file: UploadFile | None = File(None),
+    zero_overstock: str = Form("true"),
+    sto_threshold: int = Form(180),
+    user=Depends(require_permission("engine_run")),
+):
+    """Start engine in background; poll /api/process/async/{job_id} then download."""
+    include_zero_overstock = zero_overstock.lower() in ("true", "1", "yes", "on")
+    try:
+        inputs = await _load_engine_inputs(
+            main_file,
+            targets_file,
+            rank_file,
+            avoid_zero_file,
+            purchase_targets_file,
+            blocked_file,
+            blocked_os_file,
+            similar_file,
+        )
+
+        def worker(progress_cb):
+            return process_inventory(
+                main_df=inputs["main_df"],
+                targets_df=inputs["targets_df"],
+                purchase_targets_df=inputs["purchase_targets_df"],
+                rank_data=inputs["rank_data"],
+                avoid_zero_df=inputs["avoid_zero_df"],
+                similar_df=inputs["similar_df"],
+                blocked_items=set(inputs["blocked_items"]),
+                blocked_branches=set(inputs["blocked_branches"]),
+                blocked_os_items=set(inputs["blocked_os_items"]),
+                blocked_os_branches=set(inputs["blocked_os_branches"]),
+                zero_overstock=include_zero_overstock,
+                sto_threshold=sto_threshold,
+                progress_callback=progress_cb,
+            )
+
+        job_id = start_job(worker)
+        log_activity(user["id"], user["username"], "engine_run_async", job_id, _client_ip(request))
+        return {"job_id": job_id, "version": APP_VERSION}
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Upload error: {exc}") from exc
+
+
+@app.get("/api/process/async/{job_id}")
+async def engine_job_status(job_id: str, user=Depends(require_permission("engine_run"))):
+    meta = get_job(job_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Job not found or expired")
+    return {
+        "job_id": job_id,
+        "status": meta.get("status"),
+        "progress": meta.get("progress", 0),
+        "message": meta.get("message", ""),
+        "error": meta.get("error"),
+        "version": APP_VERSION,
+    }
+
+
+@app.get("/api/process/async/{job_id}/download")
+async def engine_job_download(
+    job_id: str,
+    request: Request,
+    user=Depends(require_permission("engine_run")),
+):
+    meta = get_job(job_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Job not found or expired")
+    if meta.get("status") != "done":
+        raise HTTPException(status_code=409, detail=meta.get("message") or "Job not finished")
+    path = get_job_file(job_id)
+    if not path:
+        raise HTTPException(status_code=404, detail="Result file missing")
+    filename = f"Lotus_Inventory_Decision_{datetime.now().strftime('%Y%m%d')}.xlsx"
+    log_activity(user["id"], user["username"], "engine_download", filename, _client_ip(request))
+    return FileResponse(
+        path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=filename,
+    )
 
 
 @app.get("/api/replenishment/templates/{name}")
