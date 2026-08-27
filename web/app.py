@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -330,7 +331,21 @@ async def _read_excel(upload: UploadFile | None) -> pd.DataFrame | None:
     if upload is None or not upload.filename:
         return None
     data = await upload.read()
-    df = pd.read_excel(io.BytesIO(data))
+    if not data:
+        raise HTTPException(status_code=400, detail=f"Empty file: {upload.filename}")
+    max_bytes = 120 * 1024 * 1024
+    if len(data) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large ({upload.filename}). Maximum size is 120 MB.",
+        )
+    try:
+        df = pd.read_excel(io.BytesIO(data), engine="openpyxl")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not read Excel file '{upload.filename}': {exc}",
+        ) from exc
     return floatify_numeric_columns(df)
 
 
@@ -383,7 +398,8 @@ async def run_engine(
             if blocked_os_df is not None:
                 blocked_os_items, blocked_os_branches = parse_blocked_df(blocked_os_df)
 
-        result = process_inventory(
+        result = await run_in_threadpool(
+            process_inventory,
             main_df=main_df,
             targets_df=targets_df,
             purchase_targets_df=purchase_targets_df,
@@ -397,6 +413,8 @@ async def run_engine(
             zero_overstock=include_zero_overstock,
             sto_threshold=sto_threshold,
         )
+        if not result:
+            raise HTTPException(status_code=500, detail="Engine returned empty output")
 
         filename = f"Lotus_Inventory_Decision_{datetime.now().strftime('%Y%m%d')}.xlsx"
         log_activity(user["id"], user["username"], "engine_run", filename, _client_ip(request))
@@ -405,8 +423,15 @@ async def run_engine(
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except MemoryError:
+        raise HTTPException(
+            status_code=413,
+            detail="Dataset too large for server memory. Try splitting the ERP sheet or contact admin.",
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Processing error: {exc}") from exc
 

@@ -72,7 +72,7 @@ function navAllowed(perm) {
 }
 
 async function api(url, options = {}) {
-  const res = await fetch(url, { credentials: "include", ...options });
+  const res = await fetchWithTimeout(url, { credentials: "include", ...options }, options.timeoutMs || 600000);
   if (res.status === 401) {
     window.location.href = "/login";
     throw new Error("Session expired");
@@ -288,7 +288,7 @@ function setupUpload(uploadDef) {
     input.value = "";
     let stored;
     try {
-      stored = await cloneUploadFile(file);
+      stored = await prepareUploadFile(file);
     } catch {
       showToast("Could not read file", "error");
       return;

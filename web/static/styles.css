@@ -323,6 +323,8 @@ body {
 
 .file-drop:hover, .file-drop.dragover { border-color: var(--accent); background: var(--success-light); }
 .file-drop.loaded { border-color: var(--accent); background: var(--success-light); }
+.file-drop.loading { border-color: var(--accent); opacity: 0.85; pointer-events: none; }
+.file-drop.loading .filename { color: var(--accent); font-weight: 600; }
 .file-drop input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .file-drop .filename { font-size: 0.75rem; color: var(--muted); }
 
@@ -375,6 +377,8 @@ select:focus, input:focus { outline: none; border-color: var(--accent); box-shad
 }
 
 .progress-panel { margin-top: 14px; }
+.run-status { margin-top: 12px; font-size: 0.88rem; color: var(--muted); }
+.run-status.ready { color: var(--accent); font-weight: 600; }
 .progress-bar { height: 8px; background: var(--surface-2); border-radius: 999px; overflow: hidden; margin-top: 8px; }
 .progress-fill { height: 100%; background: var(--accent); transition: width 0.3s; width: 0; }
 

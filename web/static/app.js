@@ -38,7 +38,7 @@ function hasPerm(key) {
 }
 
 async function api(url, options = {}) {
-  const res = await fetch(url, { credentials: "include", ...options });
+  const res = await fetchWithTimeout(url, { credentials: "include", ...options }, options.timeoutMs || 600000);
   if (res.status === 401) {
     window.location.href = "/login";
     throw new Error("Session expired");
@@ -163,8 +163,18 @@ function updateJourney() {
 
 function updateRunButton() {
   if (!hasPerm("engine_run")) return;
-  const required = UPLOADS.filter((u) => u.required).map((u) => u.id);
-  document.getElementById("runBtn").disabled = !required.every((id) => files[id]);
+  const required = UPLOADS.filter((u) => u.required);
+  const missing = required.filter((u) => !files[u.id]).map((u) => u.label);
+  const ready = missing.length === 0;
+  const runBtn = document.getElementById("runBtn");
+  const statusEl = document.getElementById("runStatus");
+  runBtn.disabled = !ready;
+  if (statusEl) {
+    statusEl.textContent = ready
+      ? "All required files loaded. Click Run to process."
+      : `Waiting for: ${missing.join(", ")}`;
+    statusEl.classList.toggle("ready", ready);
+  }
   updateJourney();
 }
 
@@ -198,18 +208,34 @@ function setupUpload({ id, label, required }, index) {
   const filenameEl = item.querySelector(".filename");
   const setFile = async (file) => {
     if (!file) return;
-    input.value = "";
-    let stored;
-    try {
-      stored = await cloneUploadFile(file);
-    } catch {
-      showToast("Could not read file", "error");
+    if (!/\.(xlsx|xls)$/i.test(file.name)) {
+      showToast("Please upload an Excel file (.xlsx or .xls)", "error");
       return;
     }
-    files[id] = stored;
-    drop.classList.add("loaded");
-    filenameEl.textContent = stored.name;
-    updateRunButton();
+    drop.classList.remove("loaded");
+    setDropLoading(drop, true, `Reading ${formatFileSize(file.size)}...`);
+    try {
+      const stored = await prepareUploadFile(file);
+      if (!stored) throw new Error("Empty file");
+      files[id] = stored;
+      drop.classList.add("loaded");
+      filenameEl.textContent = `${stored.name} (${formatFileSize(stored.size)})`;
+      showToast(`${label} loaded`);
+      updateRunButton();
+      if (UPLOADS.filter((u) => u.required).every((u) => files[u.id])) {
+        showToast("All required files ready — click Run", "success");
+        document.getElementById("actionsSection")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    } catch (err) {
+      delete files[id];
+      drop.classList.remove("loaded");
+      filenameEl.textContent = "Upload failed — try again";
+      showToast(err.message || "Could not read file", "error");
+      updateRunButton();
+    } finally {
+      setDropLoading(drop, false);
+      input.value = "";
+    }
   };
   input.addEventListener("click", (e) => e.stopPropagation());
   input.addEventListener("change", () => setFile(input.files[0]));
@@ -266,15 +292,27 @@ document.getElementById("historyBtn").addEventListener("click", async () => {
 
 async function downloadBlob(response, fallbackName) {
   const blob = await response.blob();
+  if (!blob || blob.size === 0) {
+    throw new Error("Server returned an empty file — check VPS logs or redeploy latest version");
+  }
   const match = (response.headers.get("Content-Disposition") || "").match(/filename="(.+)"/);
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = match ? match[1] : fallbackName;
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(a.href);
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 
 document.getElementById("runBtn").addEventListener("click", async () => {
+  const required = UPLOADS.filter((u) => u.required);
+  const missing = required.filter((u) => !files[u.id]);
+  if (missing.length) {
+    showToast(`Missing: ${missing.map((u) => u.label).join(", ")}`, "error");
+    return;
+  }
+
   const form = new FormData();
   UPLOADS.forEach(({ id }) => { if (files[id]) form.append(id, files[id]); });
   form.append("zero_overstock", document.getElementById("zeroOverstock").checked ? "true" : "false");
@@ -284,23 +322,42 @@ document.getElementById("runBtn").addEventListener("click", async () => {
     if (!threshold) { showToast("Enter STO threshold", "error"); return; }
   }
   form.append("sto_threshold", threshold);
+
   const panel = document.getElementById("progressPanel");
   const fill = document.getElementById("progressFill");
+  const progressText = document.getElementById("progressText");
+  const runBtn = document.getElementById("runBtn");
   panel.classList.remove("hidden");
-  document.getElementById("progressText").textContent = "Running engine...";
-  fill.style.width = "30%";
-  document.getElementById("runBtn").disabled = true;
+  progressText.textContent = "Uploading and processing… large files may take several minutes.";
+  fill.style.width = "15%";
+  runBtn.disabled = true;
+
   try {
-    const res = await api("/api/process", { method: "POST", body: form });
-    fill.style.width = "90%";
-    if (!res.ok) throw new Error((await res.json()).detail || "Failed");
+    const res = await api("/api/process", { method: "POST", body: form, timeoutMs: 900000 });
+    fill.style.width = "85%";
+    progressText.textContent = "Preparing download…";
+    if (!res.ok) {
+      let detail = "Engine failed";
+      try {
+        const data = await res.json();
+        detail = data.detail || detail;
+      } catch {
+        detail = await res.text() || detail;
+      }
+      throw new Error(detail);
+    }
     await downloadBlob(res, "Lotus_Inventory_Decision.xlsx");
     fill.style.width = "100%";
+    progressText.textContent = "Done!";
     showToast("Done! File downloaded.");
   } catch (err) {
-    showToast(err.message, "error");
+    const msg = err.name === "AbortError"
+      ? "Request timed out — try again or use a smaller file"
+      : (err.message || "Engine failed");
+    progressText.textContent = msg;
+    showToast(msg, "error");
   } finally {
-    setTimeout(() => panel.classList.add("hidden"), 1500);
+    setTimeout(() => panel.classList.add("hidden"), 3000);
     fill.style.width = "0%";
     updateRunButton();
   }

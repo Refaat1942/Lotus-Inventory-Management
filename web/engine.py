@@ -1,4 +1,4 @@
-﻿"""Lotus inventory processing engine for web."""
+"""Lotus inventory processing engine for web."""
 import datetime
 import io
 import math
@@ -8,7 +8,7 @@ from typing import Callable, Optional
 import numpy as np
 import pandas as pd
 
-APP_VERSION = "v9.7.8 (Web)"
+APP_VERSION = "v9.8.0 (Web)"
 DB_NAME = os.path.join(os.path.dirname(__file__), "lotus_inventory_history.db")
 
 TEMPLATES = {
@@ -37,18 +37,30 @@ def safe_int_series(s) -> pd.Series:
     return pd.Series(np.ceil(nums).astype(np.int64), index=s.index)
 
 
-def display_branch_qty(stock, display) -> pd.Series:
+def display_branch_qty(stock, display, pending=None) -> pd.Series:
     """Branch qty needed to reach Display minimum (matches POS/Purchase display rules)."""
     stock = pd.to_numeric(stock, errors="coerce").fillna(0)
     display = pd.to_numeric(display, errors="coerce").fillna(0)
-    return safe_int_series(np.where(display > 0, np.maximum(0, np.ceil(display - stock)), 0))
+    if pending is not None:
+        pending = pd.to_numeric(pending, errors="coerce").fillna(0)
+        on_hand = stock + pending
+        gap = np.maximum(0, np.ceil(display - on_hand))
+    else:
+        gap = np.maximum(0, np.ceil(display - stock))
+    return safe_int_series(np.where(display > 0, gap, 0))
 
 
-def apply_blocked_with_display(df, mask, stock):
+def apply_blocked_with_display(df, mask, stock, pending=None):
     """Blocked rows: zero REQ/purchase unless Display requires shelf quantity."""
-    qty = display_branch_qty(stock, df["Display"])
-    df.loc[mask, "Final Positive REQ"] = qty.loc[mask]
-    df.loc[mask, "Purchase Quantity"] = qty.loc[mask]
+    mask = pd.Series(mask, index=df.index) if not isinstance(mask, pd.Series) else mask.reindex(df.index, fill_value=False)
+    display = pd.to_numeric(df["Display"], errors="coerce").fillna(0)
+    qty = display_branch_qty(stock, display, pending=pending).reindex(df.index, fill_value=0)
+    has_display = mask & (display > 0)
+    df.loc[has_display, "Final Positive REQ"] = qty.loc[has_display]
+    df.loc[has_display, "Purchase Quantity"] = qty.loc[has_display]
+    no_display = mask & ~has_display
+    df.loc[no_display, "Final Positive REQ"] = 0
+    df.loc[no_display, "Purchase Quantity"] = 0
 
 
 def floatify_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -138,7 +150,11 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
         update_progress(0.1, "Phase 2: Loading & Standardizing Dataset...")
         df = floatify_numeric_columns(main_df.copy())
         df = standardize_columns(df)
-        plant_col = 'Plnt' if 'Plnt' in df.columns else 'Plant' 
+        plant_col = 'Plnt' if 'Plnt' in df.columns else 'Plant'
+        if 'Plnt' not in df.columns and 'Plant' in df.columns:
+            df['Plnt'] = df['Plant']
+        if 'Plant' not in df.columns and 'Plnt' in df.columns:
+            df['Plant'] = df['Plnt']
         if 'Display' not in df.columns: df['Display'] = 0
         if 'Storage Condition' not in df.columns: df['Storage Condition'] = ""
         if 'Manufacturer Name' not in df.columns: df['Manufacturer Name'] = ""
@@ -349,14 +365,17 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
 
         update_progress(0.5, "Phase 3.5: Filtering Blocked Lists & Protecting Display...")
         if blocked_items:
-            mask_bi = df.set_index(['temp_p', 'temp_mat']).index.isin(blocked_items)
+            mask_bi = pd.Series(
+                df.set_index(["temp_p", "temp_mat"]).index.isin(blocked_items),
+                index=df.index,
+            )
             apply_blocked_with_display(df, mask_bi, F_stock)
-            df.loc[mask_bi & (df['Action Status'] != 'Merged as Similar & Blocked'), 'Action Status'] = 'Blocked Item (User List)'
-            
+            df.loc[mask_bi & (df["Action Status"] != "Merged as Similar & Blocked"), "Action Status"] = "Blocked Item (User List)"
+
         if blocked_branches:
-            mask_bb = df['temp_p'].isin(blocked_branches)
+            mask_bb = df["temp_p"].isin(blocked_branches)
             apply_blocked_with_display(df, mask_bb, F_stock)
-            df.loc[mask_bb, 'Action Status'] = 'Blocked Branch (User List)'
+            df.loc[mask_bb, "Action Status"] = "Blocked Branch (User List)"
                 
         df_blocked_os_output = pd.DataFrame()
             
@@ -390,27 +409,39 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
             if c not in df.columns: df[c] = 0
             df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
             
-        company_totals = df.groupby(['Material']).agg(
-            Material_Group=('Material Group', 'first'),
-            Material_Description=('Material Description', 'first'),
-            Total_Dc=('Dc Stock', 'first'),
-            Total_Pending_From_DC=('Pending preparation from DC', 'first'),
-            Total_Open_PO=('Open PO Quantity', 'first'),
-            Main_Category=('Main Category', 'first'),
-            SubCategory_1=('SubCategory 1', 'first'),
-            Storage_Condition=('Storage Condition', 'first'),
-            Manufacturer_Name=('Manufacturer Name', 'first'),
-            Created_On=('Created On', 'first'),
-            Total_Stock=('Stock', 'sum'),
-            Store_Outbound=('Pending preparation to branch', 'sum'),
-            Consumption_90Day=('Consumption 90Day', 'sum'),
-            Cons_30_Day=('Consumption last 30 days', 'sum'),
-            Cons_180Day=('Consumption 180Day', 'sum'),
-            Final_Positive_REQ_Internal=('Final Positive REQ', 'sum'),
-            Final_Negative_REQ_Internal=('Overstock QTY', 'sum'),
-            Total_Purchase_REQ=('Purchase Quantity', 'sum'),
-            Sales_Price=('Sales Price', 'first')
-        ).reset_index()
+        company_totals = df.groupby(["temp_mat"], as_index=False).agg(
+            Material=("Material", "first"),
+            Material_Group=("Material Group", "first"),
+            Material_Description=("Material Description", "first"),
+            Total_Dc=("Dc Stock", "first"),
+            Total_Pending_From_DC=("Pending preparation from DC", "first"),
+            Total_Open_PO=("Open PO Quantity", "first"),
+            Main_Category=("Main Category", "first"),
+            SubCategory_1=("SubCategory 1", "first"),
+            Storage_Condition=("Storage Condition", "first"),
+            Manufacturer_Name=("Manufacturer Name", "first"),
+            Created_On=("Created On", "first"),
+            Total_Stock=("Stock", "sum"),
+            Store_Outbound=("Pending preparation to branch", "sum"),
+            Consumption_90Day=("Consumption 90Day", "sum"),
+            Cons_30_Day=("Consumption last 30 days", "sum"),
+            Cons_180Day=("Consumption 180Day", "sum"),
+            Final_Positive_REQ_Internal=("Final Positive REQ", "sum"),
+            Final_Negative_REQ_Internal=("Overstock QTY", "sum"),
+            Total_Purchase_REQ=("Purchase Quantity", "sum"),
+            Sales_Price=("Sales Price", "first"),
+        )
+        company_totals["Material"] = company_totals["temp_mat"]
+        company_totals.drop(columns=["temp_mat"], inplace=True)
+
+        branch_active_mats = set(
+            df.loc[
+                (df["Final Positive REQ"] > 0)
+                | (df["Overstock QTY"] > 0)
+                | (df["Purchase Quantity"] > 0),
+                "temp_mat",
+            ].astype(str)
+        )
 
         # === ØªØ¹Ø¯ÙŠÙ„: Ø§Ù„Ø­ÙØ§Ø¸ Ø¹Ù„Ù‰ Ø§Ù„Ø£ØµÙ†Ø§Ù Ø§Ù„Ø£Ø³Ø§Ø³ÙŠØ© (Main) ÙˆØ§Ù„Ø¨Ø¯ÙŠÙ„Ø© (Similar) ÙÙŠ Ø´ÙŠØª Company Totals ===
         if similar_df is not None:
@@ -421,16 +452,18 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
             sim_codes_ct = similar_df[m_sim_col_ct].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().unique()
             combined_codes_ct = set(main_codes_ct).union(set(sim_codes_ct))
                 
-            mask_sim_main = company_totals['Material'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().isin(combined_codes_ct)
+            mask_sim_main = company_totals["Material"].astype(str).str.strip().isin(combined_codes_ct)
         else:
-            mask_sim_main = False
+            mask_sim_main = pd.Series(False, index=company_totals.index)
 
-        company_totals = company_totals[
-            (company_totals['Final_Positive_REQ_Internal'] > 0) | 
-            (company_totals['Final_Negative_REQ_Internal'] > 0) | 
-            (company_totals['Total_Purchase_REQ'] > 0) |
-            mask_sim_main
-        ].copy()
+        include_mask = (
+            (company_totals["Final_Positive_REQ_Internal"] > 0)
+            | (company_totals["Final_Negative_REQ_Internal"] > 0)
+            | (company_totals["Total_Purchase_REQ"] > 0)
+            | company_totals["Material"].astype(str).isin(branch_active_mats)
+            | mask_sim_main
+        )
+        company_totals = company_totals[include_mask].copy()
 
         company_totals['Pos/Neg'] = np.where(
             company_totals['Final_Negative_REQ_Internal'] == 0, 
@@ -537,7 +570,8 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
             if gross_pull <= 0: continue
             target_pull = gross_pull 
 
-            mat_mask = (df['Material'] == mat) & (df['Overstock QTY'] > 0)
+            mat_key = str(mat).replace(".0", "").strip()
+            mat_mask = (df["temp_mat"] == mat_key) & (df["Overstock QTY"] > 0)
             if not mat_mask.any(): continue
 
             mat_indices = df[mat_mask].index.tolist()
@@ -719,11 +753,11 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
             df['Final Positive REQ (Distribution)'].clip(lower=0, upper=df['Final Positive REQ'])
         )
 
-        materials_to_reallocate = df[df['Realloc_Available'] > 0]['Material'].unique()
+        materials_to_reallocate = df.loc[df["Realloc_Available"] > 0, "temp_mat"].unique()
 
         for mat in materials_to_reallocate:
-            donors = df[(df['Material'] == mat) & (df['Realloc_Available'] > 0)].sort_values('Realloc_Available', ascending=False).to_dict('records')
-            receivers = df[(df['Material'] == mat) & (df['Final Positive REQ (Distribution)'] > 0)].sort_values('Final Positive REQ (Distribution)', ascending=False).to_dict('records')
+            donors = df[(df["temp_mat"] == mat) & (df["Realloc_Available"] > 0)].sort_values("Realloc_Available", ascending=False).to_dict("records")
+            receivers = df[(df["temp_mat"] == mat) & (df["Final Positive REQ (Distribution)"] > 0)].sort_values("Final Positive REQ (Distribution)", ascending=False).to_dict("records")
 
             for d in donors:
                 if d['Realloc_Available'] <= 0: continue
@@ -812,18 +846,25 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
             
         df_purchase = pd.DataFrame()
         if not company_totals.empty:
-            pulled_totals = df.groupby('Material')['Final Pullback QTY'].sum().reset_index()
-            pulled_totals.rename(columns={'Final Pullback QTY': 'Total Pulled Overstock'}, inplace=True)
-            company_totals = pd.merge(company_totals, pulled_totals, on='Material', how='left')
-            company_totals['Total Pulled Overstock'] = safe_int_series(company_totals['Total Pulled Overstock'])
-
-            company_totals['Company Purchase Quantity'] = (
-                company_totals['Total_Purchase_REQ'] 
-                - company_totals['Total Pulled Overstock'] 
-                - company_totals['Total_Open_PO'] 
-                - (company_totals['Total Dc'] - company_totals['Pending from DC'])
+            pulled_totals = df.groupby("temp_mat", as_index=False).agg(
+                Total_Pulled_Overstock=("Final Pullback QTY", "sum")
             )
-            company_totals['Company Purchase Quantity'] = safe_int_series(company_totals['Company Purchase Quantity'])
+            pulled_totals.rename(columns={"temp_mat": "Material"}, inplace=True)
+            company_totals = pd.merge(company_totals, pulled_totals, on="Material", how="left")
+            company_totals["Total Pulled Overstock"] = safe_int_series(company_totals["Total Pulled Overstock"])
+
+            company_totals["Company Purchase Quantity"] = (
+                company_totals["Total_Purchase_REQ"]
+                - company_totals["Total Pulled Overstock"]
+                - company_totals["Total_Open_PO"]
+                - (company_totals["Total Dc"] - company_totals["Pending from DC"])
+            )
+            company_totals["Company Purchase Quantity"] = safe_int_series(company_totals["Company Purchase Quantity"])
+
+            company_totals = company_totals.sort_values(
+                by=["Order Decision", "Material"],
+                ascending=[True, True],
+            )
 
             df_purchase = company_totals[company_totals['Company Purchase Quantity'] > 0].copy()
             df_purchase['Total Branch stock'] = df_purchase['Stock'] + df_purchase['Store_Outbound']
@@ -846,7 +887,10 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
         df_actionable_db = df[(df['Final Pullback QTY'] > 0) | (df['Final Positive REQ'] > 0)].copy()
 
         df_all = df.copy()
-        df_all = df_all.sort_values(by=['Final Pullback QTY', 'Final Positive REQ', 'Branch Rank'], ascending=[False, False, True])
+        sort_branch = "Plnt" if "Plnt" in df_all.columns else "Plant"
+        sort_by = [c for c in ["Material", sort_branch, "Final Positive REQ", "Final Pullback QTY"] if c in df_all.columns]
+        sort_asc = [True, True, False, False][: len(sort_by)]
+        df_all = df_all.sort_values(by=sort_by, ascending=sort_asc)
 
         output_cols = [
             'Plnt', 'Plant', 'Material', 'Material Description', 'System Decision', 'Action Status',
@@ -886,55 +930,49 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
         update_progress(0.92, "Initializing Excel Export...")
         output_buffer = io.BytesIO()
             
-        if True:
-            with pd.ExcelWriter(output_buffer, engine='openpyxl') as writer:
-                update_progress(0.93, "Exporting Company Totals Sheet...")
-                if not company_totals.empty:
-                    company_totals.to_excel(writer, sheet_name='Company Totals', index=False)
-                    df_rules_14_15 = company_totals[company_totals['Exclusion_Status'].str.contains('Rule 14|Rule 15', na=False)].copy()
-                else:
-                    pd.DataFrame(columns=['Message']).append({'Message': 'No Targets Available'}, ignore_index=True).to_excel(writer, sheet_name='Company Totals', index=False)
-                    df_rules_14_15 = pd.DataFrame()
-                    
-                update_progress(0.95, "Exporting Purchase & Reallocation Sheets...")
-                if not df_purchase.empty:
-                    df_purchase.to_excel(writer, sheet_name='Purchase', index=False)
-                if not df_reallocation.empty:
-                    df_reallocation.to_excel(writer, sheet_name='Stock Reallocation', index=False)
-                        
-                update_progress(0.97, "Exporting All Items Sheet (May take a moment)...")
-                df_all.to_excel(writer, sheet_name='All Items (With Status)', index=False)
-                    
-                update_progress(0.99, "Exporting Rules & Blocked Items Sheets...")
-                if not df_rules_14_15.empty:
-                    df_rules_14_15.to_excel(writer, sheet_name='Rules 14 & 15 Items', index=False)
-                if not df_blocked_final.empty: 
-                    df_blocked_final.to_excel(writer, sheet_name='Blocked Items', index=False)
-                if similar_df is not None:
-                    update_progress(0.99, "Exporting Detailed Similars Sheet...")
-                        
-                    # === ØªØ¹Ø¯ÙŠÙ„: Ø¥Ø­Ø¶Ø§Ø± Ø£ÙƒÙˆØ§Ø¯ Ø§Ù„Ù€ Main Ø¨Ø¬Ø§Ù†Ø¨ Ø§Ù„Ù€ Similar ===
-                    m_main_col = next((c for c in similar_df.columns if 'main' in c.lower() and 'material' in c.lower() and 'desc' not in c.lower()), similar_df.columns[0])
-                    m_sim_col = next((c for c in similar_df.columns if 'similar' in c.lower() and 'material' in c.lower() and 'desc' not in c.lower()), similar_df.columns[2])
-                        
-                    # ØªØ·Ù‡ÙŠØ± Ø§Ù„Ø£ÙƒÙˆØ§Ø¯ Ù…Ù† Ø£ÙŠ Ø£ØµÙØ§Ø± Ø¹Ø´Ø±ÙŠØ© Ø¹Ø´Ø§Ù† Ø§Ù„ØªØ·Ø§Ø¨Ù‚ ÙŠÙ†Ø¬Ø­
-                    main_codes = similar_df[m_main_col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().unique()
-                    sim_codes = similar_df[m_sim_col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().unique()
-                        
-                    # Ø¯Ù…Ø¬ Ø¬Ù…ÙŠØ¹ Ø§Ù„Ø£ÙƒÙˆØ§Ø¯ Ø§Ù„Ø£Ø³Ø§Ø³ÙŠØ© ÙˆØ§Ù„Ø¨Ø¯ÙŠÙ„Ø© ÙÙŠ Ù‚Ø§Ø¦Ù…Ø© ÙˆØ§Ø­Ø¯Ø©
-                    all_sim_main_codes = set(main_codes).union(set(sim_codes))
-                        
-                    clean_materials = df_all['Material'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
-                        
-                    # ÙÙ„ØªØ±Ø© Ø´ÙŠØª All Items Ø¨Ù†Ø§Ø¡Ù‹ Ø¹Ù„Ù‰ Ø§Ù„Ù‚Ø§Ø¦Ù…Ø© Ø§Ù„Ù…Ø¯Ù…Ø¬Ø©
-                    df_sim_detailed = df_all[clean_materials.isin(all_sim_main_codes)].copy()
-                        
-                    # ØªØ±ØªÙŠØ¨ Ø§Ù„Ø¨ÙŠØ§Ù†Ø§Øª Ù„ÙŠØ¸Ù‡Ø± Ø§Ù„ØµÙ†Ù Ø§Ù„Ø£Ø³Ø§Ø³ÙŠ Ø¨Ø¬ÙˆØ§Ø± Ø§Ù„Ø¨Ø¯ÙŠÙ„
-                    df_sim_detailed = df_sim_detailed.sort_values(by=['Material'])
-                        
-                    # ØªØµØ¯ÙŠØ± ÙÙŠ ØªØ§Ø¨ Ø§Ø³Ù…Ù‡Ø§ Similars
-                    df_sim_detailed.to_excel(writer, sheet_name='Similars', index=False)
-            update_progress(1.0, "Done!")
+        def _write_sheet(frame, sheet_name):
+            if frame is not None and not frame.empty:
+                frame.to_excel(writer, sheet_name=sheet_name, index=False)
+
+        try:
+            import xlsxwriter  # noqa: F401
+            excel_engine = "xlsxwriter"
+        except ImportError:
+            excel_engine = "openpyxl"
+        with pd.ExcelWriter(output_buffer, engine=excel_engine) as writer:
+            update_progress(0.93, "Exporting Company Totals Sheet...")
+            if not company_totals.empty:
+                company_totals.to_excel(writer, sheet_name='Company Totals', index=False)
+                df_rules_14_15 = company_totals[
+                    company_totals['Exclusion_Status'].str.contains('Rule 14|Rule 15', na=False)
+                ].copy()
+            else:
+                pd.DataFrame(columns=['Message']).append(
+                    {'Message': 'No Targets Available'}, ignore_index=True
+                ).to_excel(writer, sheet_name='Company Totals', index=False)
+                df_rules_14_15 = pd.DataFrame()
+
+            update_progress(0.95, "Exporting Purchase & All Items Sheets...")
+            _write_sheet(df_purchase, 'Purchase')
+            update_progress(0.97, "Exporting All Items Sheet (May take a moment)...")
+            df_all.to_excel(writer, sheet_name='All Items (With Status)', index=False)
+            _write_sheet(df_blocked_final, 'Blocked Items')
+            _write_sheet(df_reallocation, 'Stock Reallocation')
+
+            update_progress(0.99, "Exporting Rules & Similar Sheets...")
+            _write_sheet(df_rules_14_15, 'Rules 14 & 15 Items')
+            if similar_df is not None:
+                update_progress(0.99, "Exporting Detailed Similars Sheet...")
+                m_main_col = next((c for c in similar_df.columns if 'main' in c.lower() and 'material' in c.lower() and 'desc' not in c.lower()), similar_df.columns[0])
+                m_sim_col = next((c for c in similar_df.columns if 'similar' in c.lower() and 'material' in c.lower() and 'desc' not in c.lower()), similar_df.columns[2])
+                main_codes = similar_df[m_main_col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().unique()
+                sim_codes = similar_df[m_sim_col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().unique()
+                all_sim_main_codes = set(main_codes).union(set(sim_codes))
+                clean_materials = df_all['Material'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+                df_sim_detailed = df_all[clean_materials.isin(all_sim_main_codes)].copy()
+                df_sim_detailed = df_sim_detailed.sort_values(by=['Material'])
+                df_sim_detailed.to_excel(writer, sheet_name='Similars', index=False)
+        update_progress(1.0, "Done!")
 
         output_buffer.seek(0)
         return output_buffer.getvalue()
