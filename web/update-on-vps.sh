@@ -24,10 +24,14 @@ systemctl restart lotus-inventory
 sleep 1
 systemctl is-active lotus-inventory
 
-echo "==> Deployed version:"
+echo "==> Deployed versions (from files):"
+grep 'APP_VERSION' "$APP_DIR/engine.py" | head -1
 grep 'APP_VERSION' "$APP_DIR/replenishment_engine.py" | head -1
 
 rm -rf "$TMP"
 echo ""
-echo "Done. Verify: curl -s http://127.0.0.1:10000/api/version"
-echo "Open: http://187.124.15.14:10000/replenishment (should show v2.1.0)"
+echo "==> Live API version:"
+curl -sf http://127.0.0.1:10000/api/version || echo "(API not responding yet)"
+echo ""
+echo "Purchase should be v9.8.1 (Web) with background job support."
+echo "Open: http://187.124.15.14:10000/purchase — then Ctrl+F5 before testing."
