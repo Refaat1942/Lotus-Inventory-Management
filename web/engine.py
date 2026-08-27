@@ -11,7 +11,7 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "v9.8.3 (Web)"
+APP_VERSION = "v9.8.4 (Web)"
 DB_NAME = os.path.join(os.path.dirname(__file__), "lotus_inventory_history.db")
 
 TEMPLATES = {
@@ -850,9 +850,13 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
             )
             pulled_totals.rename(columns={"temp_mat": "Material"}, inplace=True)
             company_totals = pd.merge(company_totals, pulled_totals, on="Material", how="left")
-            company_totals["Total Pulled Overstock"] = safe_int_series(
-                company_totals["Total Pulled Overstock"].fillna(0)
-            )
+            if "Total_Pulled_Overstock" in company_totals.columns:
+                company_totals["Total Pulled Overstock"] = safe_int_series(
+                    company_totals["Total_Pulled_Overstock"].fillna(0)
+                )
+                company_totals.drop(columns=["Total_Pulled_Overstock"], inplace=True, errors="ignore")
+            else:
+                company_totals["Total Pulled Overstock"] = 0
 
             purchase_req_col = "Total_Purchase_REQ" if "Total_Purchase_REQ" in company_totals.columns else "Total Purchase Quantity"
             open_po_col = "Total_Open_PO" if "Total_Open_PO" in company_totals.columns else "Open PO Quantity"

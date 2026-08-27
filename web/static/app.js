@@ -51,22 +51,43 @@ function ensureDownloadButton() {
   return btn;
 }
 
+function showJobRecoveryBanner(jobId) {
+  const banner = document.getElementById("jobRecoveryBanner");
+  const btn = document.getElementById("jobRecoveryDownload");
+  if (!banner || !btn) return;
+  banner.classList.remove("hidden");
+  btn.onclick = async () => {
+    try {
+      await downloadEngineResult(jobId);
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  };
+}
+
+function hideJobRecoveryBanner() {
+  document.getElementById("jobRecoveryBanner")?.classList.add("hidden");
+}
+
 function hideDownloadButton() {
   const btn = document.getElementById("downloadResultBtn");
   if (btn) btn.classList.add("hidden");
   lastFinishedJobId = null;
   sessionStorage.removeItem(JOB_STORAGE_KEY);
+  hideJobRecoveryBanner();
 }
 
 function showDownloadButton(jobId) {
   lastFinishedJobId = jobId;
   sessionStorage.setItem(JOB_STORAGE_KEY, jobId);
   const btn = ensureDownloadButton();
-  if (!btn) return;
-  btn.classList.remove("hidden");
-  btn.disabled = false;
-  btn.textContent = "Download Excel Result";
-  btn.onclick = () => downloadEngineResult(jobId);
+  if (btn) {
+    btn.classList.remove("hidden");
+    btn.disabled = false;
+    btn.textContent = "Download Excel Result";
+    btn.onclick = () => downloadEngineResult(jobId);
+  }
+  showJobRecoveryBanner(jobId);
 }
 
 /** Chrome-friendly download — opens file in new tab with session cookie. */
@@ -78,10 +99,22 @@ async function downloadEngineResult(jobId) {
   const progressText = document.getElementById("progressText");
   const panel = document.getElementById("progressPanel");
   panel?.classList.remove("hidden");
-  progressText.textContent = "Opening download in Chrome…";
+  progressText.textContent = "Checking result…";
+  const stRes = await api(`/api/process/async/${jobId}`, { timeoutMs: 60000 });
+  if (!stRes.ok) {
+    throw new Error("Job not found — run the engine again");
+  }
+  const st = await stRes.json();
+  if (st.status === "failed") {
+    throw new Error(st.message || st.error || "Engine failed — fix data and run again");
+  }
+  if (st.status !== "done") {
+    throw new Error("Still processing — wait until progress shows Complete");
+  }
+  progressText.textContent = "Opening Excel download in Chrome…";
   downloadViaLink(jobId);
-  progressText.textContent = "If no file appeared, check Chrome downloads (Ctrl+J).";
-  showToast("Download started — check Chrome downloads bar (Ctrl+J)");
+  progressText.textContent = "Download started — press Ctrl+J in Chrome to see the file.";
+  showToast("Excel download started — check Ctrl+J");
 }
 
 async function pollJobUntilDone(jobId, fill, progressText) {
@@ -345,8 +378,13 @@ async function recoverEngineJobIfAny() {
     if (st.status === "done") {
       showDownloadButton(saved);
       panel?.classList.remove("hidden");
-      progressText.textContent = "Previous run finished — click Download Excel Result.";
+      progressText.textContent = "Excel is ready — click Download Excel Result.";
       showToast("Your Excel is ready — click Download Excel Result", "success");
+    } else if (st.status === "failed") {
+      panel?.classList.remove("hidden");
+      progressText.textContent = `Last run failed: ${st.message || st.error || "unknown error"}`;
+      showToast(st.message || "Last run failed — upload and run again", "error");
+      sessionStorage.removeItem(JOB_STORAGE_KEY);
     } else if (st.status === "running" || st.status === "queued") {
       panel?.classList.remove("hidden");
       progressText.textContent = "Resuming previous run…";
@@ -434,7 +472,8 @@ document.getElementById("runBtn").addEventListener("click", async () => {
   progressText.textContent = "Uploading files to server…";
   fill.style.width = "10%";
   runBtn.disabled = true;
-  hideDownloadButton();
+  ensureDownloadButton()?.classList.add("hidden");
+  hideJobRecoveryBanner();
 
   try {
     const startRes = await api("/api/process/async", {
