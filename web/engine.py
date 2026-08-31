@@ -11,7 +11,7 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "v9.8.4 (Web)"
+APP_VERSION = "v9.8.5 (Web)"
 DB_NAME = os.path.join(os.path.dirname(__file__), "lotus_inventory_history.db")
 
 TEMPLATES = {
@@ -433,37 +433,8 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
         company_totals["Material"] = company_totals["temp_mat"]
         company_totals.drop(columns=["temp_mat"], inplace=True)
 
-        branch_active_mats = set(
-            df.loc[
-                (df["Final Positive REQ"] > 0)
-                | (df["Overstock QTY"] > 0)
-                | (df["Purchase Quantity"] > 0),
-                "temp_mat",
-            ].astype(str)
-        )
-
-        # === ØªØ¹Ø¯ÙŠÙ„: Ø§Ù„Ø­ÙØ§Ø¸ Ø¹Ù„Ù‰ Ø§Ù„Ø£ØµÙ†Ø§Ù Ø§Ù„Ø£Ø³Ø§Ø³ÙŠØ© (Main) ÙˆØ§Ù„Ø¨Ø¯ÙŠÙ„Ø© (Similar) ÙÙŠ Ø´ÙŠØª Company Totals ===
-        if similar_df is not None:
-            m_main_col_ct = next((c for c in similar_df.columns if 'main' in c.lower() and 'material' in c.lower() and 'desc' not in c.lower()), similar_df.columns[0])
-            m_sim_col_ct = next((c for c in similar_df.columns if 'similar' in c.lower() and 'material' in c.lower() and 'desc' not in c.lower()), similar_df.columns[2])
-                
-            main_codes_ct = similar_df[m_main_col_ct].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().unique()
-            sim_codes_ct = similar_df[m_sim_col_ct].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().unique()
-            combined_codes_ct = set(main_codes_ct).union(set(sim_codes_ct))
-                
-            mask_sim_main = company_totals["Material"].astype(str).str.strip().isin(combined_codes_ct)
-        else:
-            mask_sim_main = pd.Series(False, index=company_totals.index)
-
-        include_mask = (
-            (company_totals["Final_Positive_REQ_Internal"] > 0)
-            | (company_totals["Final_Negative_REQ_Internal"] > 0)
-            | (company_totals["Total_Purchase_REQ"] > 0)
-            | company_totals["Material"].astype(str).isin(branch_active_mats)
-            | mask_sim_main
-        )
-        company_totals = company_totals[include_mask].copy()
-
+        # Keep every material that appears in All Items (no aggressive filter).
+        # Company Totals = one row per material; All Items = branch rows for the same materials.
         company_totals['Pos/Neg'] = np.where(
             company_totals['Final_Negative_REQ_Internal'] == 0, 
             np.nan, 
@@ -900,6 +871,8 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
         df_actionable_db = df[(df['Final Pullback QTY'] > 0) | (df['Final Positive REQ'] > 0)].copy()
 
         df_all = df.copy()
+        if "temp_mat" in df_all.columns:
+            df_all["Material"] = df_all["temp_mat"]
         sort_branch = "Plnt" if "Plnt" in df_all.columns else "Plant"
         sort_by = [c for c in ["Material", sort_branch, "Final Positive REQ", "Final Pullback QTY"] if c in df_all.columns]
         sort_asc = [True, True, False, False][: len(sort_by)]
