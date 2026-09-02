@@ -215,7 +215,7 @@ const AdminPanel = {
     document.getElementById("userModalTitle").textContent = user ? "Edit User" : "Add User";
     document.getElementById("editUserId").value = user?.id || "";
     document.getElementById("editUsername").value = user?.username || "";
-    document.getElementById("editUsername").disabled = !!user;
+    document.getElementById("editUsername").disabled = false;
     document.getElementById("editPassword").value = "";
     document.getElementById("editPassword").required = !user;
     document.getElementById("pwdHint").textContent = user ? "(leave blank to keep)" : "(required)";
@@ -242,13 +242,22 @@ const AdminPanel = {
       is_active: document.getElementById("editIsActive").checked,
       permissions: perms,
     };
-    const res = id
-      ? await this.deps.api(`/api/admin/users/${id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        })
-      : await this.deps.api("/api/admin/users", {
+    if (id) {
+      const res = await this.deps.api(`/api/admin/users/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        this.deps.showToast((await res.json()).detail || "Failed", "error");
+        return;
+      }
+      this.deps.showToast("User saved");
+      this.closeUserModal();
+      this.loadUsers();
+      return;
+    }
+    const res = await this.deps.api("/api/admin/users", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),

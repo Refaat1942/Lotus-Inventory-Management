@@ -86,7 +86,8 @@ class UserCreateBody(BaseModel):
 
 
 class UserUpdateBody(BaseModel):
-    password: str | None = None
+    username: str | None = Field(None, min_length=3, max_length=50)
+    password: str | None = Field(None, min_length=4, max_length=100)
     is_active: bool | None = None
     is_admin: bool | None = None
     permissions: list[str] | None = None
@@ -160,7 +161,7 @@ async def index(user=Depends(get_optional_user)):
 
 @app.post("/api/auth/login")
 async def login(body: LoginBody, request: Request):
-    row = get_user_by_username(body.username.strip())
+    row = get_user_by_username(body.username)
     if not row or not verify_password(body.password, row["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid username or password")
     if not row["is_active"]:
@@ -251,7 +252,17 @@ async def admin_create_user(body: UserCreateBody, request: Request, user=Depends
 
 @app.put("/api/admin/users/{user_id}")
 async def admin_update_user(user_id: int, body: UserUpdateBody, request: Request, user=Depends(require_admin())):
-    updated = update_user(user_id, body.password, body.is_active, body.is_admin, body.permissions)
+    try:
+        updated = update_user(
+            user_id,
+            body.username.strip() if body.username else None,
+            body.password,
+            body.is_active,
+            body.is_admin,
+            body.permissions,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not updated:
         raise HTTPException(status_code=404, detail="User not found")
     log_activity(user["id"], user["username"], "user_update", f"Updated user id: {user_id}", _client_ip(request))

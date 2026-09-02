@@ -8,7 +8,7 @@ from typing import Callable, Optional
 import numpy as np
 import pandas as pd
 
-APP_VERSION = "v2.1.3 (Web)"
+APP_VERSION = "v2.1.4 (Web)"
 DB_NAME = os.path.join(os.path.dirname(__file__), "lotus_replenishment_history.db")
 
 TEMPLATES = {
@@ -18,6 +18,21 @@ TEMPLATES = {
     "blocked": ["Plnt", "Plant", "Material", "Material Description"],
     "similar": ["Material ( Main)", "Material description (Main)", "Material (Similar)", "Material description (Similar)"],
 }
+
+
+def _normalize_material_column(frame: pd.DataFrame) -> pd.DataFrame:
+    """Align Material codes across export sheets (matches purchase engine temp_mat logic)."""
+    if frame.empty or "Material" not in frame.columns:
+        return frame
+    if "temp_mat" in frame.columns:
+        frame["Material"] = frame["temp_mat"]
+    elif "Main_Group_Mat" in frame.columns:
+        frame["Material"] = frame["Main_Group_Mat"]
+    else:
+        frame["Material"] = (
+            frame["Material"].astype(str).str.replace(r"\.0$", "", regex=True).str.strip()
+        )
+    return frame
 
 
 def template_excel_bytes(name: str) -> bytes:
@@ -559,11 +574,21 @@ def process_replenishment(
 
             df_final = df.copy()
 
-            if not df_blocked_display.empty and "_skip_dc" not in df.columns:
-                df_final = pd.concat([df_final, df_blocked_display], ignore_index=True)
-            
+            if not df_blocked_display.empty:
+                if "temp_mat" not in df_blocked_display.columns and "Material" in df_blocked_display.columns:
+                    df_blocked_display["temp_mat"] = (
+                        df_blocked_display["Material"]
+                        .astype(str)
+                        .str.replace(r"\.0$", "", regex=True)
+                        .str.strip()
+                    )
+                if "_skip_dc" not in df.columns:
+                    df_final = pd.concat([df_final, df_blocked_display], ignore_index=True)
+
             if df_final.empty:
                 raise ValueError("No data available to export.")
+
+            df_final = _normalize_material_column(df_final)
 
             _progress(progress_callback, 0.9, "Preparing export sheets...")
             
@@ -602,12 +627,12 @@ def process_replenishment(
                 Sum_of_Quantities=('Final Required', 'sum')
             ).reset_index() if plant_col in df_action_only.columns else pd.DataFrame()
             
-            # --- FIX 2: Use df_final instead of df_action_only so undistributed items appear ---
-            dc_summary = df_final.groupby('Material').agg(
-                Material_Description=('Material Description', 'first'),
-                Initial_DC_Stock=('Dc Stock', 'first'),
-                Total_Allocated=('Final Required', 'sum')
-            ).reset_index() if 'Material' in df_final.columns else pd.DataFrame()
+            # DC Stock Summary: every material in Final Requirement (including zero-allocation rows).
+            dc_summary = df_final.groupby("Material", as_index=False).agg(
+                Material_Description=("Material Description", "first"),
+                Initial_DC_Stock=("Dc Stock", "first"),
+                Total_Allocated=("Final Required", "sum"),
+            ) if "Material" in df_final.columns else pd.DataFrame()
             
             if not dc_summary.empty:
                 dc_summary['Remaining_DC_Stock'] = dc_summary['Initial_DC_Stock'] - dc_summary['Total_Allocated']
@@ -673,7 +698,7 @@ def process_replenishment(
                     main_codes = similar_df[m_main_col].astype(str).str.replace(r"\.0$", "", regex=True).str.strip().unique()
                     sim_codes = similar_df[m_sim_col].astype(str).str.replace(r"\.0$", "", regex=True).str.strip().unique()
                     all_sim_main_codes = set(main_codes).union(set(sim_codes))
-                    df_all_for_similars = df.copy()
+                    df_all_for_similars = _normalize_material_column(df.copy())
                     for col in output_cols:
                         if col not in df_all_for_similars.columns:
                             df_all_for_similars[col] = ""

@@ -8,6 +8,10 @@ import bcrypt
 from config import BRANDING_DIR, DB_PATH, DEFAULT_ADMIN_PASS, DEFAULT_ADMIN_USER
 
 
+def normalize_username(username: str) -> str:
+    return username.strip().lower()
+
+
 def hash_password(plain: str) -> str:
     return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
 
@@ -116,18 +120,34 @@ def init_db():
             """
         )
 
+        admin_user = normalize_username(DEFAULT_ADMIN_USER)
         admin = conn.execute(
-            "SELECT id FROM users WHERE username = ?", (DEFAULT_ADMIN_USER,)
+            "SELECT id FROM users WHERE username = ?", (admin_user,)
         ).fetchone()
         if not admin:
             conn.execute(
                 "INSERT INTO users (username, password_hash, is_admin, is_active, created_at) VALUES (?, ?, 1, 1, ?)",
                 (
-                    DEFAULT_ADMIN_USER,
+                    admin_user,
                     hash_password(DEFAULT_ADMIN_PASS),
                     datetime.now(timezone.utc).isoformat(),
                 ),
             )
+
+        # Case-insensitive login: store usernames in lowercase
+        for row in conn.execute("SELECT id, username FROM users ORDER BY id").fetchall():
+            low = normalize_username(row["username"])
+            if low == row["username"]:
+                continue
+            conflict = conn.execute(
+                "SELECT id FROM users WHERE username = ? AND id != ?",
+                (low, row["id"]),
+            ).fetchone()
+            if not conflict:
+                conn.execute(
+                    "UPDATE users SET username = ? WHERE id = ?",
+                    (low, row["id"]),
+                )
 
         for key, value in DEFAULT_BRANDING.items():
             conn.execute(
@@ -164,9 +184,10 @@ def init_db():
 
 
 def get_user_by_username(username: str):
+    norm = normalize_username(username)
     with get_db() as conn:
         return conn.execute(
-            "SELECT * FROM users WHERE username = ?", (username,)
+            "SELECT * FROM users WHERE username = ?", (norm,)
         ).fetchone()
 
 
@@ -206,6 +227,7 @@ def list_users() -> list[dict]:
 
 
 def create_user(username: str, password: str, is_admin: bool, permissions: list[str]) -> dict:
+    username = normalize_username(username)
     with get_db() as conn:
         cur = conn.execute(
             "INSERT INTO users (username, password_hash, is_admin, is_active, created_at) VALUES (?, ?, ?, 1, ?)",
@@ -228,11 +250,32 @@ def create_user(username: str, password: str, is_admin: bool, permissions: list[
     return user_to_dict(row)
 
 
-def update_user(user_id: int, password: str | None, is_active: bool | None, is_admin: bool | None, permissions: list[str] | None) -> dict:
+def update_user(
+    user_id: int,
+    username: str | None = None,
+    password: str | None = None,
+    is_active: bool | None = None,
+    is_admin: bool | None = None,
+    permissions: list[str] | None = None,
+) -> dict:
     with get_db() as conn:
         row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         if not row:
             return None
+        if username is not None:
+            username = normalize_username(username)
+            if len(username) < 3:
+                raise ValueError("Username must be at least 3 characters")
+            conflict = conn.execute(
+                "SELECT id FROM users WHERE username = ? AND id != ?",
+                (username, user_id),
+            ).fetchone()
+            if conflict:
+                raise ValueError("Username already exists")
+            conn.execute(
+                "UPDATE users SET username = ? WHERE id = ?",
+                (username, user_id),
+            )
         if password:
             conn.execute(
                 "UPDATE users SET password_hash = ? WHERE id = ?",
