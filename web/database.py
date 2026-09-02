@@ -1,3 +1,4 @@
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -120,27 +121,14 @@ def init_db():
             """
         )
 
-        admin_user = normalize_username(DEFAULT_ADMIN_USER)
-        admin = conn.execute(
-            "SELECT id FROM users WHERE username = ?", (admin_user,)
-        ).fetchone()
-        if not admin:
-            conn.execute(
-                "INSERT INTO users (username, password_hash, is_admin, is_active, created_at) VALUES (?, ?, 1, 1, ?)",
-                (
-                    admin_user,
-                    hash_password(DEFAULT_ADMIN_PASS),
-                    datetime.now(timezone.utc).isoformat(),
-                ),
-            )
+        ensure_default_admin(conn)
 
-        # Case-insensitive login: store usernames in lowercase
         for row in conn.execute("SELECT id, username FROM users ORDER BY id").fetchall():
             low = normalize_username(row["username"])
             if low == row["username"]:
                 continue
             conflict = conn.execute(
-                "SELECT id FROM users WHERE username = ? AND id != ?",
+                "SELECT id FROM users WHERE LOWER(TRIM(username)) = ? AND id != ?",
                 (low, row["id"]),
             ).fetchone()
             if not conflict:
@@ -183,11 +171,58 @@ def init_db():
                 )
 
 
+def _find_user_by_username_ci(conn, username: str):
+    norm = normalize_username(username)
+    return conn.execute(
+        "SELECT * FROM users WHERE LOWER(TRIM(username)) = ? ORDER BY id LIMIT 1",
+        (norm,),
+    ).fetchone()
+
+
+def ensure_default_admin(conn):
+    """Create or repair the default admin account (case-insensitive username)."""
+    admin_user = normalize_username(DEFAULT_ADMIN_USER)
+    row = _find_user_by_username_ci(conn, admin_user)
+    if not row:
+        conn.execute(
+            "INSERT INTO users (username, password_hash, is_admin, is_active, created_at) VALUES (?, ?, 1, 1, ?)",
+            (
+                admin_user,
+                hash_password(DEFAULT_ADMIN_PASS),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        return
+
+    if row["username"] != admin_user:
+        dup = conn.execute(
+            "SELECT id FROM users WHERE username = ? AND id != ?",
+            (admin_user, row["id"]),
+        ).fetchone()
+        if not dup:
+            conn.execute(
+                "UPDATE users SET username = ? WHERE id = ?",
+                (admin_user, row["id"]),
+            )
+
+    conn.execute(
+        "UPDATE users SET is_active = 1, is_admin = 1 WHERE id = ?",
+        (row["id"],),
+    )
+
+    if os.getenv("LOTUS_SYNC_ADMIN_PASSWORD", "").lower() in ("1", "true", "yes"):
+        conn.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (hash_password(DEFAULT_ADMIN_PASS), row["id"]),
+        )
+
+
 def get_user_by_username(username: str):
     norm = normalize_username(username)
     with get_db() as conn:
         return conn.execute(
-            "SELECT * FROM users WHERE username = ?", (norm,)
+            "SELECT * FROM users WHERE LOWER(TRIM(username)) = ? ORDER BY id LIMIT 1",
+            (norm,),
         ).fetchone()
 
 
@@ -229,6 +264,12 @@ def list_users() -> list[dict]:
 def create_user(username: str, password: str, is_admin: bool, permissions: list[str]) -> dict:
     username = normalize_username(username)
     with get_db() as conn:
+        existing = conn.execute(
+            "SELECT id FROM users WHERE LOWER(TRIM(username)) = ?",
+            (username,),
+        ).fetchone()
+        if existing:
+            raise ValueError("Username already exists")
         cur = conn.execute(
             "INSERT INTO users (username, password_hash, is_admin, is_active, created_at) VALUES (?, ?, ?, 1, ?)",
             (
@@ -267,7 +308,7 @@ def update_user(
             if len(username) < 3:
                 raise ValueError("Username must be at least 3 characters")
             conflict = conn.execute(
-                "SELECT id FROM users WHERE username = ? AND id != ?",
+                "SELECT id FROM users WHERE LOWER(TRIM(username)) = ? AND id != ?",
                 (username, user_id),
             ).fetchone()
             if conflict:
