@@ -11,6 +11,10 @@ param(
 $ErrorActionPreference = "Stop"
 $LocalWeb = $PSScriptRoot
 
+Write-Host "==> Local versions:"
+Select-String -Path (Join-Path $LocalWeb "engine.py") -Pattern "APP_VERSION" | Select-Object -First 1
+Select-String -Path (Join-Path $LocalWeb "replenishment_engine.py") -Pattern "APP_VERSION" | Select-Object -First 1
+
 Write-Host "==> Uploading from: $LocalWeb"
 Write-Host "==> To: ${VpsUser}@${VpsHost}:${RemoteDir}"
 
@@ -21,7 +25,7 @@ ssh "${VpsUser}@${VpsHost}" "mkdir -p $RemoteDir"
 $files = @(
     "app.py", "auth.py", "config.py", "database.py", "engine.py", "engine_jobs.py",
     "replenishment_engine.py", "requirements.txt", "lotus-inventory.service",
-    "setup-vps.sh", "redeploy.sh", ".env.example"
+    "setup-vps.sh", "redeploy.sh", "update-on-vps.sh", ".env.example"
 )
 foreach ($f in $files) {
     if (Test-Path (Join-Path $LocalWeb $f)) {
@@ -45,10 +49,14 @@ if [ -x $RemoteDir/setup-vps.sh ] && [ ! -d $RemoteDir/venv ]; then
 else
   source $RemoteDir/venv/bin/activate && pip install -r $RemoteDir/requirements.txt -q
   systemctl restart lotus-inventory
+  sleep 2
   systemctl status lotus-inventory --no-pager
+  echo '--- Live API version ---'
+  curl -sf http://127.0.0.1:10000/api/version || echo '(API not responding)'
 fi
 "@
 
 Write-Host ""
 Write-Host "Deployed! Open: http://${VpsHost}:10000"
-Write-Host "Login: admin / admin"
+Write-Host "Check version: http://${VpsHost}:10000/api/version"
+Write-Host "Then Ctrl+Shift+R on purchase/settings pages."
