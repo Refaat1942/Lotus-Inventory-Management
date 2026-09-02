@@ -8,7 +8,7 @@ from typing import Callable, Optional
 import numpy as np
 import pandas as pd
 
-APP_VERSION = "v2.1.4 (Web)"
+APP_VERSION = "v2.1.5 (Web)"
 DB_NAME = os.path.join(os.path.dirname(__file__), "lotus_replenishment_history.db")
 
 TEMPLATES = {
@@ -139,10 +139,13 @@ def parse_blocked_df(df_b: pd.DataFrame):
         return blocked_items, blocked_branches
     for _, row in df_b.iterrows():
         for p_col in plant_cols:
-            b = str(row[p_col]).strip()
+            b = str(row[p_col]).strip().upper()
             if b and b != "nan":
                 if m_col:
-                    m = str(row[m_col]).replace(".0", "").strip()
+                    m = str(row[m_col]).strip()
+                    if m.endswith(".0"):
+                        m = m[:-2]
+                    m = m.strip()
                     if m and m != "nan" and m != "":
                         blocked_items.add((b, m))
                     else:
@@ -223,6 +226,7 @@ def process_replenishment(
             df = floatify_integer_columns(standardize_columns(main_df.copy()))
             df = standardize_columns(df)
             plant_col = 'Plant' if 'Plant' in df.columns else 'Plnt'
+            blocked_display_in_df = False
             
             _progress(progress_callback, 0.2, "Filtering blocked items & branches...")
             df_blocked_output = pd.DataFrame(columns=df.columns) 
@@ -233,7 +237,7 @@ def process_replenishment(
                 
                 for p_col in ['Plnt', 'Plant']:
                     if p_col in df.columns:
-                        df['temp_p'] = df[p_col].astype(str).str.strip()
+                        df['temp_p'] = df[p_col].astype(str).str.strip().str.upper()
                         if blocked_items:
                             item_mask = df.set_index(["temp_p", "temp_mat"]).index.isin(blocked_items)
                             mask = mask | pd.Series(item_mask, index=df.index)
@@ -260,6 +264,7 @@ def process_replenishment(
                 raise ValueError("No items left to process after filtering blocked items.")
             if df.empty:
                 df = df_blocked_display.copy()
+                blocked_display_in_df = True
 
             _progress(progress_callback, 0.25, "Processing Similar Items...")
             if 'temp_mat' not in df.columns:
@@ -582,7 +587,7 @@ def process_replenishment(
                         .str.replace(r"\.0$", "", regex=True)
                         .str.strip()
                     )
-                if "_skip_dc" not in df.columns:
+                if not blocked_display_in_df:
                     df_final = pd.concat([df_final, df_blocked_display], ignore_index=True)
 
             if df_final.empty:

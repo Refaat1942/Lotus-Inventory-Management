@@ -54,14 +54,27 @@ def display_branch_qty(stock, display, pending=None) -> pd.Series:
 
 
 def apply_blocked_with_display(df, mask, stock, pending=None):
-    """Blocked rows: zero REQ/purchase unless Display requires shelf quantity."""
+    """Blocked rows: zero REQ/purchase/overstock unless Display requires shelf quantity."""
     mask = pd.Series(mask, index=df.index) if not isinstance(mask, pd.Series) else mask.reindex(df.index, fill_value=False)
-    display = pd.to_numeric(df["Display"], errors="coerce").fillna(0)
+    if not mask.any():
+        return
+    if pending is None:
+        pending = pd.to_numeric(df.get("Pending preparation to branch", 0), errors="coerce").fillna(0)
+    display = pd.to_numeric(df.get("Display", 0), errors="coerce").fillna(0)
     qty = display_branch_qty(stock, display, pending=pending).reindex(df.index, fill_value=0)
-    has_display = mask & (display > 0)
-    df.loc[has_display, "Final Positive REQ"] = qty.loc[has_display]
-    df.loc[has_display, "Purchase Quantity"] = qty.loc[has_display]
-    no_display = mask & ~has_display
+    has_display_gap = mask & (qty > 0)
+
+    df.loc[mask, "Final Negative REQ"] = 0
+    df.loc[mask, "Overstock QTY"] = 0
+    if "Calculated NEG REQ" in df.columns:
+        df.loc[mask, "Calculated NEG REQ"] = 0
+    if "Calculated POS REQ" in df.columns:
+        df.loc[mask, "Calculated POS REQ"] = 0
+
+    df.loc[has_display_gap, "Final Positive REQ"] = qty.loc[has_display_gap]
+    df.loc[has_display_gap, "Purchase Quantity"] = qty.loc[has_display_gap]
+
+    no_display = mask & ~has_display_gap
     df.loc[no_display, "Final Positive REQ"] = 0
     df.loc[no_display, "Purchase Quantity"] = 0
 

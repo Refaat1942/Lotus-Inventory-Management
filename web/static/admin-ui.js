@@ -215,7 +215,10 @@ const AdminPanel = {
     document.getElementById("userModalTitle").textContent = user ? "Edit User" : "Add User";
     document.getElementById("editUserId").value = user?.id || "";
     document.getElementById("editUsername").value = user?.username || "";
-    document.getElementById("editUsername").disabled = false;
+    const usernameInput = document.getElementById("editUsername");
+    usernameInput.disabled = false;
+    usernameInput.readOnly = false;
+    usernameInput.removeAttribute("readonly");
     document.getElementById("editPassword").value = "";
     document.getElementById("editPassword").required = !user;
     document.getElementById("pwdHint").textContent = user ? "(leave blank to keep)" : "(required)";
