@@ -11,7 +11,7 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "v9.8.6 (Web)"
+APP_VERSION = "v9.8.7 (Web)"
 DB_NAME = os.path.join(os.path.dirname(__file__), "lotus_inventory_history.db")
 
 TEMPLATES = {
@@ -32,12 +32,22 @@ def template_excel_bytes(name: str) -> bytes:
     return buf.getvalue()
 
 
-def safe_int_series(s) -> pd.Series:
-    """Ceiling float values to int — avoids pandas 'Invalid value for dtype int64' errors."""
-    if not isinstance(s, pd.Series):
-        s = pd.Series(s)
-    nums = pd.to_numeric(s, errors="coerce").fillna(0.0).to_numpy(dtype=float)
-    return pd.Series(np.ceil(nums).astype(np.int64), index=s.index)
+def safe_int_series(s, index=None) -> pd.Series:
+    """Ceiling float values to int — preserves DataFrame index when provided."""
+    if isinstance(s, pd.Series):
+        idx = s.index
+        nums = pd.to_numeric(s, errors="coerce").fillna(0.0).to_numpy(dtype=float)
+        return pd.Series(np.ceil(nums).astype(np.int64), index=idx)
+    arr = np.asarray(s, dtype=float)
+    arr = np.nan_to_num(arr, nan=0.0)
+    out = np.ceil(arr).astype(np.int64)
+    return pd.Series(out, index=index)
+
+
+def _numeric_col(df, col, default=0):
+    if col in df.columns:
+        return pd.to_numeric(df[col], errors="coerce").fillna(default)
+    return pd.Series(default, index=df.index)
 
 
 def display_branch_qty(stock, display, pending=None) -> pd.Series:
@@ -47,10 +57,11 @@ def display_branch_qty(stock, display, pending=None) -> pd.Series:
     if pending is not None:
         pending = pd.to_numeric(pending, errors="coerce").fillna(0)
         on_hand = stock + pending
-        gap = np.maximum(0, np.ceil(display - on_hand))
     else:
-        gap = np.maximum(0, np.ceil(display - stock))
-    return safe_int_series(np.where(display > 0, gap, 0))
+        on_hand = stock
+    gap = np.ceil((display - on_hand).clip(lower=0))
+    gap = gap.where(display > 0, 0)
+    return safe_int_series(gap)
 
 
 def apply_blocked_with_display(df, mask, stock, pending=None):
@@ -59,8 +70,8 @@ def apply_blocked_with_display(df, mask, stock, pending=None):
     if not mask.any():
         return
     if pending is None:
-        pending = pd.to_numeric(df.get("Pending preparation to branch", 0), errors="coerce").fillna(0)
-    display = pd.to_numeric(df.get("Display", 0), errors="coerce").fillna(0)
+        pending = _numeric_col(df, "Pending preparation to branch", 0)
+    display = _numeric_col(df, "Display", 0)
     qty = display_branch_qty(stock, display, pending=pending).reindex(df.index, fill_value=0)
     has_display_gap = mask & (qty > 0)
 
@@ -105,15 +116,27 @@ def parse_rank_df(df_rank: pd.DataFrame) -> dict:
 
 def parse_blocked_df(df_b: pd.DataFrame):
     blocked_items, blocked_branches = set(), set()
-    p_cols = [c for c in df_b.columns if c.strip().lower() in ["plnt","plant","branch"]]
+    all_plant_cols = [c for c in df_b.columns if c.strip().lower() in ["plnt","plant","branch"]]
+    plnt_cols = [c for c in all_plant_cols if c.strip().lower() == "plnt"]
+    plant_cols = [c for c in all_plant_cols if c.strip().lower() == "plant"]
+    branch_cols = [c for c in all_plant_cols if c.strip().lower() == "branch"]
+    if plnt_cols:
+        p_cols = plnt_cols
+    elif plant_cols:
+        p_cols = plant_cols
+    else:
+        p_cols = branch_cols
     m_col = next((c for c in df_b.columns if c.strip().lower() in ["material","item code"]), None)
     if not p_cols: return blocked_items, blocked_branches
     for _, row in df_b.iterrows():
         for p_col in p_cols:
-            b = str(row[p_col]).strip()
+            b = str(row[p_col]).strip().upper()
             if b and b != "nan":
                 if m_col:
-                    m = str(row[m_col]).replace(".0","").strip()
+                    m = str(row[m_col]).strip()
+                    if m.endswith(".0"):
+                        m = m[:-2]
+                    m = m.strip()
                     if m and m != "nan" and m != "": blocked_items.add((b,m))
                     else: blocked_branches.add(b)
                 else: blocked_branches.add(b)
@@ -176,7 +199,7 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
         if 'Manufacturer Name' not in df.columns: df['Manufacturer Name'] = ""
             
         df['temp_mat'] = df['Material'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
-        df['temp_p'] = df[plant_col].astype(str).str.strip()
+        df['temp_p'] = df[plant_col].astype(str).str.strip().str.upper()
             
         df['Action Status'] = 'Pending'
         if 'Days Since Last STO' not in df.columns: df['Days Since Last STO'] = 0
@@ -327,9 +350,10 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
 
         update_progress(0.4, "Phase 3.3 & 3.4: Dynamic Consumption & REQ Calculation...")
             
-        df['Consumption 180Day'] = pd.to_numeric(df.get('Consumption 180Day', 0), errors='coerce').fillna(0)
-        df['Consumption 90Day'] = pd.to_numeric(df.get('Consumption 90Day', 0), errors='coerce').fillna(0)
-        df['Consumption last 30 days'] = pd.to_numeric(df.get('Consumption last 30 days', 0), errors='coerce').fillna(0)
+        for col in ('Consumption 180Day', 'Consumption 90Day', 'Consumption last 30 days'):
+            if col not in df.columns:
+                df[col] = 0
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
             
         ratio_30_90 = df['Consumption last 30 days'] / df['Consumption 90Day'].replace(0, np.nan)
             
@@ -339,19 +363,20 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
             
         df['Daily Consumption'] = df['Consumption 90Day'] / df['R_analysis']
             
-        F_stock = pd.to_numeric(df.get('Stock', 0), errors='coerce').fillna(0)
-        Pending_branch = pd.to_numeric(df.get('Pending preparation to branch', 0), errors='coerce').fillna(0)
+        F_stock = _numeric_col(df, 'Stock', 0)
+        Pending_branch = _numeric_col(df, 'Pending preparation to branch', 0)
         Total_Stock = F_stock + Pending_branch 
             
         S_target = df['Target Days']
         df['Calculated POS REQ'] = (df['Daily Consumption'] * S_target) - Total_Stock
         df['Final Positive REQ'] = safe_int_series(
-            np.where(df['Calculated POS REQ'] > 0, np.ceil(df['Calculated POS REQ']), 0)
+            np.where(df['Calculated POS REQ'] > 0, np.ceil(df['Calculated POS REQ']), 0),
+            index=df.index,
         )
 
         # Ø§Ù„Ù€ Positive REQ Ø¨ÙŠØ¨Øµ Ø¹Ù„Ù‰ Ø§Ù„Ù€ Display
-        mask_pos_display = (F_stock + df['Final Positive REQ']) < df['Display']
-        df.loc[mask_pos_display, 'Final Positive REQ'] = np.ceil(df['Display'] - F_stock)
+        mask_pos_display = (Total_Stock + df['Final Positive REQ']) < df['Display']
+        df.loc[mask_pos_display, 'Final Positive REQ'] = np.ceil(df['Display'] - Total_Stock)
         df['Final Positive REQ'] = safe_int_series(df['Final Positive REQ'])
 
         OS_target = df['Overstock Target Days']
@@ -367,12 +392,13 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
                 (df['Daily Consumption'] * df['Purchase Target Days']) - Total_Stock > 0,
                 np.ceil((df['Daily Consumption'] * df['Purchase Target Days']) - Total_Stock),
                 0,
-            )
+            ),
+            index=df.index,
         )
             
         # --- ØªØ¹Ø¯ÙŠÙ„ Ø§Ù„Ù€ Purchase Ù„Ù„Ù€ Display Ø§Ù„Ø¥Ø¬Ø¨Ø§Ø±ÙŠ ---
-        mask_purch_display = (F_stock + df['Purchase Quantity']) < df['Display']
-        df.loc[mask_purch_display, 'Purchase Quantity'] = np.ceil(df['Display'] - F_stock)
+        mask_purch_display = (Total_Stock + df['Purchase Quantity']) < df['Display']
+        df.loc[mask_purch_display, 'Purchase Quantity'] = np.ceil(df['Display'] - Total_Stock)
         df['Purchase Quantity'] = safe_int_series(df['Purchase Quantity'])
 
         update_progress(0.5, "Phase 3.5: Filtering Blocked Lists & Protecting Display...")
@@ -381,12 +407,12 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
                 df.set_index(["temp_p", "temp_mat"]).index.isin(blocked_items),
                 index=df.index,
             )
-            apply_blocked_with_display(df, mask_bi, F_stock)
+            apply_blocked_with_display(df, mask_bi, F_stock, pending=Pending_branch)
             df.loc[mask_bi & (df["Action Status"] != "Merged as Similar & Blocked"), "Action Status"] = "Blocked Item (User List)"
 
         if blocked_branches:
             mask_bb = df["temp_p"].isin(blocked_branches)
-            apply_blocked_with_display(df, mask_bb, F_stock)
+            apply_blocked_with_display(df, mask_bb, F_stock, pending=Pending_branch)
             df.loc[mask_bb, "Action Status"] = "Blocked Branch (User List)"
                 
         df_blocked_os_output = pd.DataFrame()
@@ -413,8 +439,8 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
 
         update_progress(0.6, "Calculating Company Totals & Applying Pos/Neg Rules...")
             
-        df['Pending preparation from DC'] = pd.to_numeric(df.get('Pending preparation from DC', 0), errors='coerce').fillna(0)
-        df['Open PO Quantity'] = pd.to_numeric(df.get('Open PO Quantity', 0), errors='coerce').fillna(0)
+        df['Pending preparation from DC'] = _numeric_col(df, 'Pending preparation from DC', 0)
+        df['Open PO Quantity'] = _numeric_col(df, 'Open PO Quantity', 0)
             
         num_cols_to_fill = ['Dc Stock']
         for c in num_cols_to_fill:
@@ -533,7 +559,7 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
 
         update_progress(0.7, "Running 5-Phase Dynamic Smart Pullback Algorithm...")
         df['Branch Rank'] = df['temp_p'].map(lambda x: rank_data.get(str(x), 999))
-        df['Days Since Last STO'] = pd.to_numeric(df.get('Days Since Last STO', 0), errors='coerce').fillna(0)
+        df['Days Since Last STO'] = _numeric_col(df, 'Days Since Last STO', 0)
             
         df['Final Pullback QTY'] = 0
             

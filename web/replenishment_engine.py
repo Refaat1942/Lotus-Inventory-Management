@@ -8,7 +8,7 @@ from typing import Callable, Optional
 import numpy as np
 import pandas as pd
 
-APP_VERSION = "v2.1.5 (Web)"
+APP_VERSION = "v2.1.6 (Web)"
 DB_NAME = os.path.join(os.path.dirname(__file__), "lotus_replenishment_history.db")
 
 TEMPLATES = {
@@ -42,12 +42,16 @@ def template_excel_bytes(name: str) -> bytes:
     return buf.getvalue()
 
 
-def safe_int_series(s) -> pd.Series:
-    """Ceiling float values to int — avoids pandas 'Invalid value for dtype int64' errors."""
-    if not isinstance(s, pd.Series):
-        s = pd.Series(s)
-    nums = pd.to_numeric(s, errors="coerce").fillna(0.0).to_numpy(dtype=float)
-    return pd.Series(np.ceil(nums).astype(np.int64), index=s.index)
+def safe_int_series(s, index=None) -> pd.Series:
+    """Ceiling float values to int — preserves DataFrame index when provided."""
+    if isinstance(s, pd.Series):
+        idx = s.index
+        nums = pd.to_numeric(s, errors="coerce").fillna(0.0).to_numpy(dtype=float)
+        return pd.Series(np.ceil(nums).astype(np.int64), index=idx)
+    arr = np.asarray(s, dtype=float)
+    arr = np.nan_to_num(arr, nan=0.0)
+    out = np.ceil(arr).astype(np.int64)
+    return pd.Series(out, index=index)
 
 
 def display_branch_qty(stock, pending, display) -> pd.Series:
@@ -55,7 +59,9 @@ def display_branch_qty(stock, pending, display) -> pd.Series:
     stock = pd.to_numeric(stock, errors="coerce").fillna(0)
     pending = pd.to_numeric(pending, errors="coerce").fillna(0)
     display = pd.to_numeric(display, errors="coerce").fillna(0)
-    return safe_int_series(np.where(display > 0, np.maximum(0, np.ceil(display - stock - pending)), 0))
+    gap = np.ceil((display - stock - pending).clip(lower=0))
+    gap = gap.where(display > 0, 0)
+    return safe_int_series(gap)
 
 
 def build_blocked_display_req(df_blocked: pd.DataFrame) -> pd.DataFrame:
@@ -133,12 +139,22 @@ def parse_rank_df(df_rank: pd.DataFrame) -> dict:
 
 def parse_blocked_df(df_b: pd.DataFrame):
     blocked_items, blocked_branches = set(), set()
-    plant_cols = [c for c in df_b.columns if c.strip().lower() in ["plnt", "plant", "branch"]]
+    all_plant_cols = [c for c in df_b.columns if c.strip().lower() in ["plnt", "plant", "branch"]]
+    plnt_cols = [c for c in all_plant_cols if c.strip().lower() == "plnt"]
+    plant_cols = [c for c in all_plant_cols if c.strip().lower() == "plant"]
+    branch_cols = [c for c in all_plant_cols if c.strip().lower() == "branch"]
+    # Prefer branch code (Plnt) over descriptive Plant name when both exist
+    if plnt_cols:
+        p_cols = plnt_cols
+    elif plant_cols:
+        p_cols = plant_cols
+    else:
+        p_cols = branch_cols
     m_col = next((c for c in df_b.columns if c.strip().lower() in ["material", "item code"]), None)
-    if not plant_cols:
+    if not p_cols:
         return blocked_items, blocked_branches
     for _, row in df_b.iterrows():
-        for p_col in plant_cols:
+        for p_col in p_cols:
             b = str(row[p_col]).strip().upper()
             if b and b != "nan":
                 if m_col:
@@ -225,7 +241,7 @@ def process_replenishment(
             _progress(progress_callback, 0.1, "Loading main dataset...")
             df = floatify_integer_columns(standardize_columns(main_df.copy()))
             df = standardize_columns(df)
-            plant_col = 'Plant' if 'Plant' in df.columns else 'Plnt'
+            plant_col = 'Plnt' if 'Plnt' in df.columns else 'Plant'
             blocked_display_in_df = False
             
             _progress(progress_callback, 0.2, "Filtering blocked items & branches...")
@@ -243,7 +259,8 @@ def process_replenishment(
                             mask = mask | pd.Series(item_mask, index=df.index)
                         if blocked_branches:
                             mask = mask | df["temp_p"].isin(blocked_branches)
-                        df.drop(columns=['temp_p'], inplace=True)
+                if 'temp_p' in df.columns:
+                    df.drop(columns=['temp_p'], inplace=True, errors='ignore')
                 
                 df_blocked_output = df[mask].drop(columns=['temp_mat']).copy()
                 df = df[~mask].drop(columns=['temp_mat']).copy()
