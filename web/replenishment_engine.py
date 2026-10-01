@@ -196,12 +196,16 @@ def apply_targets_excel(df_targets: pd.DataFrame, branches: list[str]) -> dict[s
             target_val = float(row[target_col])
         except Exception:
             continue
-        matched_branch = next((p for p in possible_plants if p in targets_map), None)
-        if matched_branch:
-            if "non-pharma" in cat or "non_pharma" in cat or cat == "non pharma":
-                targets_map[matched_branch]["non_pharma"] = target_val
-            elif "pharma" in cat:
-                targets_map[matched_branch]["pharma"] = target_val
+        # The engine looks branches up by the Plnt code, while the branch list
+        # may hold Plant names, so register the target under every identifier.
+        is_non = "non-pharma" in cat or "non_pharma" in cat or "non pharma" in cat
+        if not is_non and "pharma" not in cat:
+            continue
+        for p in possible_plants:
+            if not p or p == "nan":
+                continue
+            entry = targets_map.setdefault(p, {"pharma": 0.0, "non_pharma": 0.0})
+            entry["non_pharma" if is_non else "pharma"] = target_val
     return targets_map
 
 
