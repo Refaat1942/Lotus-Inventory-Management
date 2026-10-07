@@ -340,12 +340,21 @@ def process_replenishment(
             if 'Material Description' not in df.columns: df['Material Description'] = "Unknown"
             if 'Display' not in df.columns: df['Display'] = 0
 
-            targets_map = branch_targets
+            # The UI keys targets by the Plant name (see extract_branches) while
+            # the engine groups by the Plnt code, so match on either identifier.
+            targets_map = {
+                str(k).strip().upper(): v for k, v in (branch_targets or {}).items()
+            }
+            branch_id_cols = [c for c in ('Plnt', 'Plant') if c in df.columns]
 
             def get_initial_target(row):
-                branch_name = row.get(plant_col)
                 category = str(row.get('Main Category', '')).lower().strip()
-                branch_targets = targets_map.get(branch_name, {'pharma': 0.0, 'non_pharma': 0.0})
+                branch_targets = {'pharma': 0.0, 'non_pharma': 0.0}
+                for c in branch_id_cols:
+                    key = str(row.get(c, '')).strip().upper()
+                    if key in targets_map:
+                        branch_targets = targets_map[key]
+                        break
                 
                 if 'non' in category:
                     return branch_targets['non_pharma']
