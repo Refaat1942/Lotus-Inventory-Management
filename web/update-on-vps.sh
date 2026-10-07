@@ -31,7 +31,11 @@ grep 'APP_VERSION' "$APP_DIR/replenishment_engine.py" | head -1
 rm -rf "$TMP"
 echo ""
 echo "==> Live API version:"
-curl -sf http://127.0.0.1:10000/api/version || echo "(API not responding yet)"
+for i in $(seq 1 15); do
+  curl -sf http://127.0.0.1:10000/api/version && break
+  [ "$i" = 15 ] && echo "(API not responding after 15s — check: journalctl -u lotus-inventory -n 50)"
+  sleep 1
+done
 echo ""
 echo "Purchase should be v9.8.7 (Web) — blocked+Display shelf qty fix."
-echo "Open: http://187.124.15.14:10000/purchase — then Ctrl+F5 before testing."
+echo "Open: http://187.124.177.138:10000/purchase — then Ctrl+F5 before testing."

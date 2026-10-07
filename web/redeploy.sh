@@ -28,4 +28,4 @@ systemctl restart lotus-inventory
 systemctl status lotus-inventory --no-pager
 
 echo ""
-echo "==> Redeploy complete — http://187.124.15.14:10000"
+echo "==> Redeploy complete — http://187.124.177.138:10000"

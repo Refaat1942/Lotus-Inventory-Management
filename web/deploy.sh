@@ -1,9 +1,9 @@
 #!/bin/bash
 # Deploy Lotus Inventory Web to VPS
-# Usage: ./deploy.sh user@187.124.15.14
+# Usage: ./deploy.sh user@187.124.177.138
 
 set -e
-VPS="${1:-root@187.124.15.14}"
+VPS="${1:-root@187.124.177.138}"
 APP_DIR="/opt/lotus-inventory"
 PORT=10000
 
@@ -58,6 +58,6 @@ systemctl status lotus-inventory --no-pager
 EOF
 
 echo ""
-echo "Deployed! Access at: http://187.124.15.14:$PORT"
+echo "Deployed! Access at: http://187.124.177.138:$PORT"
 echo "Login: admin / admin"
 echo "IMPORTANT: Change LOTUS_SECRET_KEY and admin password after first login."

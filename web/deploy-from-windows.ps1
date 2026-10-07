@@ -1,10 +1,10 @@
 # Upload Lotus Inventory web app to VPS from Windows
 # Usage: .\deploy-from-windows.ps1
-#        .\deploy-from-windows.ps1 -VpsUser root -VpsHost 187.124.15.14
+#        .\deploy-from-windows.ps1 -VpsUser root -VpsHost 187.124.177.138
 
 param(
     [string]$VpsUser = "root",
-    [string]$VpsHost = "187.124.15.14",
+    [string]$VpsHost = "187.124.177.138",
     [string]$RemoteDir = "/opt/lotus-inventory"
 )
 
