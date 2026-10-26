@@ -243,11 +243,14 @@ async function loadBranchesFromMain(file) {
   const data = await res.json();
   renderBranchTable(data.branches);
   showToast(`Loaded ${data.branches.length} branches from main dataset`);
+  // Re-uploading the main dataset rebuilds the table empty; refill it.
+  if (files.targets_file) await applyTargetsFromFile(files.targets_file);
 }
 
 async function applyTargetsFromFile(file) {
   if (!files.main_file) {
-    showToast("Upload Main Dataset first", "error");
+    // Kept and applied once the Main Dataset is uploaded (and sent with the run).
+    showToast("Targets file saved — it will be applied after the Main Dataset is uploaded");
     return;
   }
   const fd = new FormData();
@@ -415,7 +418,7 @@ document.getElementById("runBtn").addEventListener("click", async () => {
   const form = new FormData();
   form.append("main_file", files.main_file);
   form.append("branch_targets", JSON.stringify(getBranchTargets()));
-  ["rank_file", "blocked_file", "similar_file"].forEach((id) => {
+  ["targets_file", "rank_file", "blocked_file", "similar_file"].forEach((id) => {
     if (files[id]) form.append(id, files[id]);
   });
 
