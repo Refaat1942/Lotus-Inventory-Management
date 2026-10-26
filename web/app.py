@@ -684,7 +684,7 @@ async def repl_apply_targets(
         main_df = await _read_excel(main_file)
         targets_df = await _read_excel(targets_file)
         branches = extract_branches(main_df)
-        targets = apply_targets_excel(targets_df, branches)
+        targets = apply_targets_excel(targets_df, branches, main_df)
         return {"targets": targets}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
