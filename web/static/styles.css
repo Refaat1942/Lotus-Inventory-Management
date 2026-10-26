@@ -626,3 +626,22 @@ fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 12px; 
 .btn-warning { background: #e67e22; color: #fff; border: none; }
 .btn-warning:hover { filter: brightness(1.05); }
 @media (max-width: 600px) { .user-modal-grid { grid-template-columns: 1fr; } }
+
+/* Program version (version-badge.js) */
+.app-version { font-size: 0.75rem; color: var(--muted); }
+.app-version-login { margin-top: 16px; text-align: center; }
+.app-version-corner {
+  position: fixed;
+  top: 10px;
+  right: 16px;
+  z-index: 50;
+  padding: 4px 10px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  pointer-events: none;
+}
+@media (max-width: 640px) {
+  .app-version-corner { top: auto; bottom: 8px; right: 8px; }
+}
