@@ -2,13 +2,14 @@
 import datetime
 import io
 import os
+import re
 import sqlite3
 from typing import Callable, Optional
 
 import numpy as np
 import pandas as pd
 
-APP_VERSION = "v2.1.6 (Web)"
+APP_VERSION = "v2.1.8 (Web)"
 DB_NAME = os.path.join(os.path.dirname(__file__), "lotus_replenishment_history.db")
 
 TEMPLATES = {
@@ -179,33 +180,69 @@ def extract_branches(main_df: pd.DataFrame) -> list[str]:
     return sorted(str(b) for b in df[plant_col].dropna().unique())
 
 
-def apply_targets_excel(df_targets: pd.DataFrame, branches: list[str]) -> dict[str, dict[str, float]]:
-    target_col = next((col for col in df_targets.columns if "target" in str(col).lower() or "days" in str(col).lower()), None)
-    cat_col = next((col for col in df_targets.columns if "category" in str(col).lower()), None)
+_ARABIC_FOLD = str.maketrans({"أ": "ا", "إ": "ا", "آ": "ا", "ى": "ي", "ة": "ه", "–": "-", "—": "-", "ـ": ""})
+
+
+def _norm_branch_key(value) -> str:
+    """Loose key for matching branch codes/names typed differently across files."""
+    text = str(value).strip()
+    if text.endswith(".0"):
+        text = text[:-2]
+    text = text.translate(_ARABIC_FOLD).upper()
+    return re.sub(r"[\s\-]+", " ", text).strip()
+
+
+def _category_kind(cat: str) -> Optional[str]:
+    cat = re.sub(r"[\s_\-]+", "", str(cat).lower())
+    if "nonpharma" in cat:
+        return "non_pharma"
+    if "pharma" in cat:
+        return "pharma"
+    return None
+
+
+def apply_targets_excel(
+    df_targets: pd.DataFrame, branches: list[str], main_df: Optional[pd.DataFrame] = None
+) -> dict[str, dict[str, float]]:
+    df_targets = df_targets.copy()
+    df_targets.columns = df_targets.columns.astype(str).str.strip()
+    target_col = next((col for col in df_targets.columns if "target" in col.lower() or "days" in col.lower()), None)
+    cat_col = next((col for col in df_targets.columns if "category" in col.lower()), None)
     if not cat_col or not target_col:
         raise ValueError("Targets Excel must contain 'Main Category' and 'Target Days'.")
     targets_map = {b: {"pharma": 0.0, "non_pharma": 0.0} for b in branches}
+
+    # The branch table shown in the UI is keyed by the exact identifiers from
+    # extract_branches (Plant names when present). Resolve every target row to
+    # one of those keys via the Plnt code or a loosely-normalized name.
+    lookup: dict[str, str] = {_norm_branch_key(b): b for b in branches}
+    if main_df is not None:
+        mdf = standardize_columns(main_df.copy())
+        ui_col = "Plant" if "Plant" in mdf.columns else "Plnt"
+        if ui_col in mdf.columns:
+            for c in ("Plnt", "Plant"):
+                if c not in mdf.columns:
+                    continue
+                for ident, ui_name in mdf[[c, ui_col]].dropna().astype(str).drop_duplicates().itertuples(index=False):
+                    lookup.setdefault(_norm_branch_key(ident), ui_name.strip())
+
     for _, row in df_targets.iterrows():
-        possible_plants = []
-        if "Plnt" in df_targets.columns:
-            possible_plants.append(str(row["Plnt"]).strip())
-        if "Plant" in df_targets.columns:
-            possible_plants.append(str(row["Plant"]).strip())
-        cat = str(row[cat_col]).strip().lower()
+        kind = _category_kind(row[cat_col])
+        if kind is None:
+            continue
         try:
             target_val = float(row[target_col])
         except Exception:
             continue
-        # The engine looks branches up by the Plnt code, while the branch list
-        # may hold Plant names, so register the target under every identifier.
-        is_non = "non-pharma" in cat or "non_pharma" in cat or "non pharma" in cat
-        if not is_non and "pharma" not in cat:
+        if pd.isna(target_val):
             continue
-        for p in possible_plants:
-            if not p or p == "nan":
+        for c in ("Plnt", "Plant"):
+            if c not in df_targets.columns:
                 continue
-            entry = targets_map.setdefault(p, {"pharma": 0.0, "non_pharma": 0.0})
-            entry["non_pharma" if is_non else "pharma"] = target_val
+            branch = lookup.get(_norm_branch_key(row[c]))
+            if branch:
+                targets_map.setdefault(branch, {"pharma": 0.0, "non_pharma": 0.0})[kind] = target_val
+                break
     return targets_map
 
 
@@ -343,7 +380,7 @@ def process_replenishment(
             # The UI keys targets by the Plant name (see extract_branches) while
             # the engine groups by the Plnt code, so match on either identifier.
             targets_map = {
-                str(k).strip().upper(): v for k, v in (branch_targets or {}).items()
+                _norm_branch_key(k): v for k, v in (branch_targets or {}).items()
             }
             branch_id_cols = [c for c in ('Plnt', 'Plant') if c in df.columns]
 
@@ -351,17 +388,14 @@ def process_replenishment(
                 category = str(row.get('Main Category', '')).lower().strip()
                 branch_targets = {'pharma': 0.0, 'non_pharma': 0.0}
                 for c in branch_id_cols:
-                    key = str(row.get(c, '')).strip().upper()
+                    key = _norm_branch_key(row.get(c, ''))
                     if key in targets_map:
                         branch_targets = targets_map[key]
                         break
                 
-                if 'non' in category:
-                    return branch_targets['non_pharma']
-                elif 'pharma' in category:
+                if _category_kind(category) == 'pharma':
                     return branch_targets['pharma']
-                else:
-                    return branch_targets['non_pharma']
+                return branch_targets['non_pharma']
 
             df['target stock days chosen'] = df.apply(get_initial_target, axis=1)
 
