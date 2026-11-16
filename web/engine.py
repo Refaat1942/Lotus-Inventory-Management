@@ -9,9 +9,11 @@ from typing import Callable, Optional
 import numpy as np
 import pandas as pd
 
+from excel_io import stream_sheet, streaming_workbook
+
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "v9.8.7 (Web)"
+APP_VERSION = "v9.8.8 (Web)"
 DB_NAME = os.path.join(os.path.dirname(__file__), "lotus_inventory_history.db")
 
 TEMPLATES = {
@@ -219,30 +221,53 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
             pairs[m_main_col] = pairs[m_main_col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
             pairs[m_sim_col] = pairs[m_sim_col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
             pairs = pairs.drop_duplicates()
-            for _, row in pairs.iterrows():
-                main_mat = row[m_main_col]
-                sim_mat = row[m_sim_col]
+            # Row labels per (branch, material) and per material, in sheet order, built once.
+            # (Scanning the whole sheet for every pair/branch was O(pairs x rows).)
+            rows_by_bm = df.groupby(['temp_p', 'temp_mat'], sort=False).groups
+            branches_by_mat = df.drop_duplicates(['temp_mat', 'temp_p']).groupby('temp_mat', sort=False)['temp_p'].agg(list).to_dict()
+            pos_of = pd.Series(np.arange(len(df)), index=df.index)
+            num_vals = {
+                col: pd.to_numeric(df[col], errors='coerce').fillna(0).to_numpy(dtype=float, copy=True)
+                for col in agg_columns if col in df.columns
+            }
+            written = {col: set() for col in num_vals}
+            main_rows, merged_sim_rows = [], []
+            for main_mat, sim_mat in pairs.itertuples(index=False, name=None):
                 if not main_mat or main_mat == 'nan' or not sim_mat or sim_mat == 'nan':
                     continue
-                sim_mask = df['temp_mat'] == sim_mat
-                if not sim_mask.any():
-                    continue
-                for b in df.loc[sim_mask, 'temp_p'].unique():
-                    s_b_mask = (df['temp_p'] == b) & (df['temp_mat'] == sim_mat)
-                    m_b_mask = (df['temp_p'] == b) & (df['temp_mat'] == main_mat)
-                    if m_b_mask.any():
-                        for col in agg_columns:
-                            if col in df.columns:
-                                s_val = pd.to_numeric(df.loc[s_b_mask, col], errors='coerce').fillna(0).sum()
-                                m_val = pd.to_numeric(df.loc[m_b_mask, col], errors='coerce').fillna(0).iloc[0]
-                                df.loc[m_b_mask, col] = m_val + s_val
-                        df.loc[m_b_mask, 'is_main_item'] = True
+                for b in branches_by_mat.get(sim_mat, []):
+                    s_rows = rows_by_bm.get((b, sim_mat))
+                    m_rows = rows_by_bm.get((b, main_mat))
+                    if m_rows is not None and len(m_rows):
+                        s_pos = pos_of[s_rows].to_numpy()
+                        m_pos = pos_of[m_rows].to_numpy()
+                        for col, vals in num_vals.items():
+                            vals[m_pos] = vals[m_pos[0]] + vals[s_pos].sum()
+                            written[col].update(m_pos.tolist())
+                        main_rows.extend(m_rows)
                     blocked_items.add((b, sim_mat))
                     blocked_os_items.add((b, sim_mat))
-                    if s_b_mask.any():
-                        df.loc[s_b_mask, 'Action Status'] = 'Merged as Similar & Blocked'
+                    if s_rows is not None and len(s_rows):
+                        merged_sim_rows.extend(s_rows)
+            for col, vals in num_vals.items():
+                if written[col]:
+                    w = np.fromiter(sorted(written[col]), dtype=np.int64)
+                    df.loc[df.index[w], col] = vals[w]
+            if main_rows:
+                df.loc[main_rows, 'is_main_item'] = True
+            if merged_sim_rows:
+                df.loc[merged_sim_rows, 'Action Status'] = 'Merged as Similar & Blocked'
 
         update_progress(0.2, "Phase 3.1: Applying Targets & Purchase Targets...")
+        _cat_lower = df['Main Category'].astype(str).str.lower() if 'Main Category' in df.columns else pd.Series('', index=df.index)
+        _cat_non = _cat_lower.str.contains('non')
+        _cat_pharma = (~_cat_non) & _cat_lower.str.contains('pharma')
+        _branch_masks = {}
+
+        def _branch_mask(b):
+            if b not in _branch_masks:
+                _branch_masks[b] = df['temp_p'] == b
+            return _branch_masks[b]
         df['Target Days'] = 35 
         df['Overstock Target Days'] = 45 
         df['Target Distribution Target Days'] = 30 
@@ -270,11 +295,11 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
                         
                     if t_cat_col:
                         cat = str(row[t_cat_col]).strip().lower()
-                        if 'non' in cat: mask = (df['temp_p'] == b) & (df['Main Category'].astype(str).str.lower().str.contains('non'))
-                        else: mask = (df['temp_p'] == b) & (~df['Main Category'].astype(str).str.lower().str.contains('non')) & (df['Main Category'].astype(str).str.lower().str.contains('pharma'))
+                        if 'non' in cat: mask = _branch_mask(b) & _cat_non
+                        else: mask = _branch_mask(b) & _cat_pharma
                     else:
                         # Apply to all items in the branch if category column is missing
-                        mask = (df['temp_p'] == b)
+                        mask = _branch_mask(b)
 
                     if not pd.isna(target_val): df.loc[mask, 'Target Days'] = target_val
                     if not pd.isna(os_target_val): df.loc[mask, 'Overstock Target Days'] = os_target_val
@@ -297,11 +322,11 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
                         mask = pd.Series(False, index=df.index)
                         if pt_cat_col:
                             cat = str(row[pt_cat_col]).strip().lower()
-                            if 'non' in cat: mask = (df['temp_p'] == b) & (df['Main Category'].astype(str).str.lower().str.contains('non'))
-                            else: mask = (df['temp_p'] == b) & (~df['Main Category'].astype(str).str.lower().str.contains('non')) & (df['Main Category'].astype(str).str.lower().str.contains('pharma'))
+                            if 'non' in cat: mask = _branch_mask(b) & _cat_non
+                            else: mask = _branch_mask(b) & _cat_pharma
                         else:
                             # Apply to all items in the branch if category column is missing
-                            mask = (df['temp_p'] == b)
+                            mask = _branch_mask(b)
                             
                         df.loc[mask, 'Purchase Target Days'] = target_val
 
@@ -325,6 +350,7 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
                 
             if az_p_cols:
                 az_p_col = az_p_cols[0]
+                az_pairs = set()
                 for _, row in az_df.iterrows():
                     b = str(row[az_p_col]).strip()
                     if not b or b == 'nan': continue
@@ -333,20 +359,22 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
                     cat_val = str(row[az_cat_col]).strip().lower() if az_cat_col else 'nan'
                         
                     if m_val != 'nan':
-                        mask = (df['temp_p'] == b) & (df['temp_mat'] == m_val)
-                        df.loc[mask, 'Is_Avoid_Zero'] = True
+                        az_pairs.add((b, m_val))
                     elif cat_val != 'nan' and cat_val != '':
                         is_pharma = ('pharma' in cat_val and 'non' not in cat_val) or ('all' in cat_val)
                         is_non_pharma = ('non' in cat_val) or ('all' in cat_val)
                         if is_pharma:
-                            mask = (df['temp_p'] == b) & (~df['Main Category'].astype(str).str.lower().str.contains('non')) & (df['Main Category'].astype(str).str.lower().str.contains('pharma'))
+                            mask = _branch_mask(b) & _cat_pharma
                             df.loc[mask, 'Is_Avoid_Zero'] = True
                         if is_non_pharma:
-                            mask = (df['temp_p'] == b) & (df['Main Category'].astype(str).str.lower().str.contains('non'))
+                            mask = _branch_mask(b) & _cat_non
                             df.loc[mask, 'Is_Avoid_Zero'] = True
                     else:
-                        mask = (df['temp_p'] == b)
+                        mask = _branch_mask(b)
                         df.loc[mask, 'Is_Avoid_Zero'] = True
+                if az_pairs:
+                    az_hit = pd.MultiIndex.from_arrays([df['temp_p'], df['temp_mat']]).isin(list(az_pairs))
+                    df.loc[az_hit, 'Is_Avoid_Zero'] = True
 
         update_progress(0.4, "Phase 3.3 & 3.4: Dynamic Consumption & REQ Calculation...")
             
@@ -574,16 +602,21 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
         sto_dict = df['Days Since Last STO'].to_dict()
         rank_dict = df['Branch Rank'].to_dict()
         is_az_dict = df['Is_Avoid_Zero'].to_dict()
+        ost_dict = df['Overstock Target Days'].to_dict()
+        # Rows with overstock per material, in sheet order (was a full-sheet scan per material).
+        _os_rows = df.index[df["Overstock QTY"] > 0]
+        os_rows_by_mat = (
+            pd.Series(_os_rows, index=_os_rows).groupby(df.loc[_os_rows, "temp_mat"].to_numpy(), sort=False).agg(list).to_dict()
+            if len(_os_rows) else {}
+        )
             
         for mat, gross_pull in needed_pullbacks.items():
             if gross_pull <= 0: continue
             target_pull = gross_pull 
 
             mat_key = str(mat).replace(".0", "").strip()
-            mat_mask = (df["temp_mat"] == mat_key) & (df["Overstock QTY"] > 0)
-            if not mat_mask.any(): continue
-
-            mat_indices = df[mat_mask].index.tolist()
+            mat_indices = os_rows_by_mat.get(mat_key)
+            if not mat_indices: continue
             pullbacks = {i: 0 for i in mat_indices}
                 
             max_pull_allowed = {}
@@ -640,11 +673,23 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
 
                 max_days = int(max((stock_dict[i] / dc_dict[i]) for i in group if dc_dict[i] > 0)) + 1
                     
-                for d in range(max_days, -1, -1):
-                    current_pulls = {i: min(max_pulls[i], max(0, int(stock_dict[i] - max(d, df.at[i, 'Overstock Target Days']) * dc_dict[i]))) for i in group}
-                    if sum(current_pulls.values()) >= needed:
+                def pulls_at(d):
+                    return {i: min(max_pulls[i], max(0, int(stock_dict[i] - max(d, ost_dict[i]) * dc_dict[i]))) for i in group}
+
+                # Total pull never increases as d grows, so the largest d in [0, max_days]
+                # with total >= needed (what a countdown from max_days finds) is found by
+                # binary search instead of evaluating every day.
+                if sum(pulls_at(0).values()) >= needed:
+                    lo, hi = 0, max_days
+                    while lo < hi:
+                        mid = (lo + hi + 1) // 2
+                        if sum(pulls_at(mid).values()) >= needed:
+                            lo = mid
+                        else:
+                            hi = mid - 1
+                    for d in (lo,):
                         safe_d = d + 1
-                        safe_pulls = {i: min(max_pulls[i], max(0, int(stock_dict[i] - max(safe_d, df.at[i, 'Overstock Target Days']) * dc_dict[i]))) for i in group}
+                        safe_pulls = pulls_at(safe_d)
                         for i in group: pullbacks[i] += safe_pulls[i]
                         rem = needed - sum(safe_pulls.values())
                         if rem > 0:
@@ -692,44 +737,48 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
                 if val > 0:
                     df.at[i, 'Final Pullback QTY'] = val
 
-        def finalize_action_status(row):
-            if 'Blocked' in str(row['Action Status']): 
-                return row['Action Status']
-                    
-            if row['Final Pullback QTY'] > 0: 
-                base_status = 'Action Taken: Pulled to DC'
-                if row['Is_Avoid_Zero'] and row['Overstock QTY'] > row['Final Pullback QTY'] and (row['Stock'] - row['Final Pullback QTY'] <= 1):
-                    base_status += ' (Avoid Zero Applied)'
-                return base_status
-                    
-            if row['Final Positive REQ'] > 0: 
-                return 'Action Taken: Shortage Logged'
-                    
-            if row['Overstock QTY'] > 0 and row['Final Pullback QTY'] == 0: 
-                if row['Is_Avoid_Zero'] and row['Stock'] <= 1:
-                    return 'Protected by Avoid Zero'
-                if 'Protected' in str(row['Action Status']):
-                    return row['Action Status']
-                return 'Overstock Exists but DC Target Met'
-                    
-            return 'Balanced / No Action Needed'
-                
-        df['Action Status'] = df.apply(finalize_action_status, axis=1)
+        _status = df['Action Status'].astype(str)
+        _pull = df['Final Pullback QTY']
+        _pos = df['Final Positive REQ']
+        _osq = df['Overstock QTY']
+        _az = df['Is_Avoid_Zero'].astype(bool)
+        _stock = df['Stock']
+        _blocked = _status.str.contains('Blocked', regex=False)
+        _pulled_az = _az & (_osq > _pull) & ((_stock - _pull) <= 1)
+        df['Action Status'] = np.select(
+            [
+                _blocked,
+                (_pull > 0) & _pulled_az,
+                _pull > 0,
+                _pos > 0,
+                (_osq > 0) & (_pull == 0) & _az & (_stock <= 1),
+                (_osq > 0) & (_pull == 0) & _status.str.contains('Protected', regex=False),
+                (_osq > 0) & (_pull == 0),
+            ],
+            [
+                df['Action Status'],
+                'Action Taken: Pulled to DC (Avoid Zero Applied)',
+                'Action Taken: Pulled to DC',
+                'Action Taken: Shortage Logged',
+                'Protected by Avoid Zero',
+                df['Action Status'],
+                'Overstock Exists but DC Target Met',
+            ],
+            default='Balanced / No Action Needed',
+        )
 
             # Ø§Ù„Ø³Ø·ÙˆØ± Ø¯ÙŠ Ù‡ØªØ¬Ø¨Ø± Ø§Ù„ÙƒÙˆØ¯ ÙŠÙƒØªØ¨ Ø¥Ù† Ø¯Ù‡ ØµÙ†Ù Ù…ÙŠÙ† Ù…Ù‡Ù…Ø§ ÙƒØ§Ù†Øª Ø­Ø§Ù„ØªÙ‡
         if 'is_main_item' in df.columns:
             mask_main = df['is_main_item'] == True
             df.loc[mask_main, 'Action Status'] = df.loc[mask_main, 'Action Status'].astype(str) + ' (Main Item - Merged)'
 
-        def get_final_decision(row):
-            decisions = []
-            if row['Final Pullback QTY'] > 0: decisions.append("PULLBACK TO DC")
-            if row['Final Positive REQ'] > 0: decisions.append("ORDER SHORTAGE")
-                
-            if not decisions: return "HOLD"
-            return " + ".join(decisions)
-                
-        df['System Decision'] = df.apply(get_final_decision, axis=1)
+        _has_pull = df['Final Pullback QTY'] > 0
+        _has_pos = df['Final Positive REQ'] > 0
+        df['System Decision'] = np.select(
+            [_has_pull & _has_pos, _has_pull, _has_pos],
+            ["PULLBACK TO DC + ORDER SHORTAGE", "PULLBACK TO DC", "ORDER SHORTAGE"],
+            default="HOLD",
+        )
 
         # =========================================================================
         # Stock Reallocation Engine (Inter-Branch Transfers)
@@ -764,9 +813,19 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
 
         materials_to_reallocate = df.loc[df["Realloc_Available"] > 0, "temp_mat"].unique()
 
+        _realloc_cols = ['temp_mat', 'temp_p', 'Plant', 'Material Description', 'Stock', 'Realloc_Available',
+                         'Final Positive REQ (Distribution)', 'Target Distribution Target Days']
+        _realloc_pool = df.loc[
+            df["temp_mat"].isin(materials_to_reallocate)
+            & ((df["Realloc_Available"] > 0) | (df["Final Positive REQ (Distribution)"] > 0)),
+            [c for c in _realloc_cols if c in df.columns],
+        ]
+        _realloc_groups = dict(tuple(_realloc_pool.groupby("temp_mat", sort=False)))
+
         for mat in materials_to_reallocate:
-            donors = df[(df["temp_mat"] == mat) & (df["Realloc_Available"] > 0)].sort_values("Realloc_Available", ascending=False).to_dict("records")
-            receivers = df[(df["temp_mat"] == mat) & (df["Final Positive REQ (Distribution)"] > 0)].sort_values("Final Positive REQ (Distribution)", ascending=False).to_dict("records")
+            _g = _realloc_groups[mat]
+            donors = _g[_g["Realloc_Available"] > 0].sort_values("Realloc_Available", ascending=False).to_dict("records")
+            receivers = _g[_g["Final Positive REQ (Distribution)"] > 0].sort_values("Final Positive REQ (Distribution)", ascending=False).to_dict("records")
 
             for d in donors:
                 if d['Realloc_Available'] <= 0: continue
@@ -954,33 +1013,27 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
         # --- MODIFIED: Export with Progress Updates ---
         update_progress(0.92, "Initializing Excel Export...")
         output_buffer = io.BytesIO()
-            
+        workbook, formats = streaming_workbook(output_buffer)
+
         def _write_sheet(frame, sheet_name):
             if frame is not None and not frame.empty:
-                frame.to_excel(writer, sheet_name=sheet_name, index=False)
+                stream_sheet(workbook, sheet_name, frame, formats)
 
         try:
-            import xlsxwriter  # noqa: F401
-            excel_engine = "xlsxwriter"
-        except ImportError:
-            excel_engine = "openpyxl"
-        with pd.ExcelWriter(output_buffer, engine=excel_engine) as writer:
             update_progress(0.93, "Exporting Company Totals Sheet...")
             if not company_totals.empty:
-                company_totals.to_excel(writer, sheet_name='Company Totals', index=False)
+                stream_sheet(workbook, 'Company Totals', company_totals, formats)
                 df_rules_14_15 = company_totals[
                     company_totals['Exclusion_Status'].str.contains('Rule 14|Rule 15', na=False)
                 ].copy()
             else:
-                pd.DataFrame(columns=['Message']).append(
-                    {'Message': 'No Targets Available'}, ignore_index=True
-                ).to_excel(writer, sheet_name='Company Totals', index=False)
+                stream_sheet(workbook, 'Company Totals', pd.DataFrame({'Message': ['No Targets Available']}), formats)
                 df_rules_14_15 = pd.DataFrame()
 
             update_progress(0.95, "Exporting Purchase & All Items Sheets...")
             _write_sheet(df_purchase, 'Purchase')
             update_progress(0.97, "Exporting All Items Sheet (May take a moment)...")
-            df_all.to_excel(writer, sheet_name='All Items (With Status)', index=False)
+            stream_sheet(workbook, 'All Items (With Status)', df_all, formats)
             _write_sheet(df_blocked_final, 'Blocked Items')
             _write_sheet(df_reallocation, 'Stock Reallocation')
 
@@ -996,7 +1049,10 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
                 clean_materials = df_all['Material'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
                 df_sim_detailed = df_all[clean_materials.isin(all_sim_main_codes)].copy()
                 df_sim_detailed = df_sim_detailed.sort_values(by=['Material'])
-                df_sim_detailed.to_excel(writer, sheet_name='Similars', index=False)
+                stream_sheet(workbook, 'Similars', df_sim_detailed, formats)
+            update_progress(0.995, "Finalizing Excel file...")
+        finally:
+            workbook.close()
         update_progress(1.0, "Done!")
 
         output_buffer.seek(0)

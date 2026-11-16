@@ -9,7 +9,9 @@ from typing import Callable, Optional
 import numpy as np
 import pandas as pd
 
-APP_VERSION = "v2.1.8 (Web)"
+from excel_io import stream_sheet, streaming_workbook
+
+APP_VERSION = "v2.1.9 (Web)"
 DB_NAME = os.path.join(os.path.dirname(__file__), "lotus_replenishment_history.db")
 
 TEMPLATES = {
@@ -418,6 +420,8 @@ def process_replenishment(
             _progress(progress_callback, 0.5, "Running base distribution engine (Push & Pull)...")
             
             def process_material_group(group):
+                # Same allocation rules as before; per-branch bookkeeping now runs on
+                # numpy arrays instead of hundreds of tiny pandas operations per material.
                 group = floatify_integer_columns(group.copy())
                 if "_skip_dc" in group.columns and group["_skip_dc"].all():
                     qty = safe_int_series(group["Final Required"])
@@ -426,137 +430,139 @@ def process_replenishment(
                     group["original_raw_required"] = group["required"]
                     return group
                 branch_group = group.drop_duplicates(subset=[plant_col]).copy()
-                
+
+                bg_dc = branch_group['daily_consumption'].to_numpy(dtype=float)
+                bg_stock = branch_group['Stock'].to_numpy(dtype=float)
+                bg_pend = branch_group['Pending preparation to branch'].to_numpy(dtype=float)
+                bg_disp = branch_group['Display'].to_numpy(dtype=float)
+                bg_plants = branch_group[plant_col].to_numpy(dtype=object)
+                no_cons_no_disp = (bg_dc == 0) & (bg_disp == 0)
+                disp_gap = np.maximum(np.ceil(bg_disp - bg_stock - bg_pend), 0)
+                disp_gap[np.isnan(bg_disp - bg_stock - bg_pend)] = np.nan
+
                 def evaluate_requirements(current_targets, use_display=True):
-                    req = (branch_group['daily_consumption'] * current_targets) - (branch_group['Stock'] + branch_group['Pending preparation to branch'])
+                    req = (bg_dc * current_targets) - (bg_stock + bg_pend)
                     req_updated = req.copy()
                     req_updated[req_updated < 0] = 0
-                    
+
                     if use_display:
-                        curr_tot = branch_group['Stock'] + req_updated + branch_group['Pending preparation to branch']
-                        mask_disp = (branch_group['Display'] > 0) & (curr_tot < branch_group['Display'])
-                        display_gap = (
-                            branch_group['Display'][mask_disp]
-                            - branch_group['Stock'][mask_disp]
-                            - branch_group['Pending preparation to branch'][mask_disp]
-                        )
-                        req_updated[mask_disp] = np.ceil(display_gap).clip(lower=0)
-                    
-                    req_updated[(branch_group['daily_consumption'] == 0) & (branch_group['Display'] == 0)] = 0
+                        curr_tot = bg_stock + req_updated + bg_pend
+                        mask_disp = (bg_disp > 0) & (curr_tot < bg_disp)
+                        req_updated[mask_disp] = disp_gap[mask_disp]
+
+                    req_updated[no_cons_no_disp] = 0
                     return req_updated, np.ceil(req_updated)
 
-                initial_targets = branch_group['target stock days chosen'].copy()
+                initial_targets = branch_group['target stock days chosen'].to_numpy(dtype=float)
                 raw_req, rounded_req = evaluate_requirements(initial_targets, use_display=True)
-                _, absolute_full_req = evaluate_requirements(initial_targets, use_display=True)
-                
-                branch_group['original_raw_required'] = raw_req
-                branch_group['original_required'] = rounded_req
-                
+                absolute_full_req = rounded_req.copy()
+
+                # Row that carries each branch's original requirement: its first Main row, else its first row.
+                g_plants = group[plant_col].to_numpy(dtype=object)
+                g_is_main = (group['Item_Role'] == 'Main').to_numpy()
+                g_mats = group['temp_mat'].to_numpy(dtype=object)
+                orig_raw_col = np.zeros(len(group))
+                orig_round_col = np.zeros(len(group))
+                for k, b_name in enumerate(bg_plants):
+                    b_pos = np.flatnonzero(g_plants == b_name)
+                    main_pos = b_pos[g_is_main[b_pos]]
+                    carrier = main_pos[0] if len(main_pos) else b_pos[0]
+                    orig_raw_col[carrier] = raw_req[k]
+                    orig_round_col[carrier] = rounded_req[k]
                 group['original_raw_required'] = 0.0
                 group['original_required'] = 0.0
-                for b_name in branch_group[plant_col]:
-                    b_mask = group[plant_col] == b_name
-                    orig_raw = branch_group.loc[branch_group[plant_col] == b_name, 'original_raw_required'].iloc[0]
-                    orig_round = branch_group.loc[branch_group[plant_col] == b_name, 'original_required'].iloc[0]
-                    
-                    main_idx = group[b_mask & (group['Item_Role'] == 'Main')].index
-                    if not main_idx.empty:
-                        group.loc[main_idx[0], 'original_raw_required'] = orig_raw
-                        group.loc[main_idx[0], 'original_required'] = orig_round
-                    else:
-                        first_idx = group[b_mask].index[0]
-                        group.loc[first_idx, 'original_raw_required'] = orig_raw
-                        group.loc[first_idx, 'original_required'] = orig_round
+                group['original_raw_required'] = orig_raw_col
+                group['original_required'] = orig_round_col
 
                 total_dc_stock = group.groupby('temp_mat')['Dc Stock'].first().sum()
                 pending_dc = group.groupby('temp_mat')['Pending preparation from DC'].first().sum() if 'Pending preparation from DC' in group.columns else 0
                 dc_stock = max(0, total_dc_stock - pending_dc)
-                
+
                 group['required'] = 0.0
                 group['rounded up required'] = 0.0
                 group['Final Allocated Target Days'] = group['target stock days chosen'].astype(float)
-                
+
                 if dc_stock <= 0:
                     return group
-                    
+
                 _, display_only_req = evaluate_requirements(initial_targets * 0, use_display=True)
-                can_afford_display = display_only_req.sum() <= dc_stock
+                can_afford_display = np.nansum(display_only_req) <= dc_stock
                 raw_req, rounded_req = evaluate_requirements(initial_targets, use_display=can_afford_display)
-                total_required = rounded_req.sum()
+                total_required = np.nansum(rounded_req)
 
                 # --- التعديل الجوهري: إلغاء الفورس درين لو الصنف من عائلة (Main/Similar) ---
                 is_pair_group = group['Is_Sim_Main_Pair'].iloc[0] if 'Is_Sim_Main_Pair' in group.columns else False
                 force_drain_allowed = (total_required > dc_stock) and not is_pair_group
 
-                rank_lookup_col = plant_col
-                
                 if total_required > dc_stock:
                     low = 0.0
-                    high = float(initial_targets.max())
-                    
+                    high = float(pd.Series(initial_targets).max())
+
                     best_targets = initial_targets * 0
                     raw_allocation, best_rounded = evaluate_requirements(best_targets, use_display=can_afford_display)
-                    
+
                     for _ in range(12):
                         mid = (low + high) / 2.0
                         test_targets = np.minimum(initial_targets, mid)
                         test_raw, test_rounded = evaluate_requirements(test_targets, use_display=can_afford_display)
-                        
-                        if test_rounded.sum() <= dc_stock:
+
+                        if np.nansum(test_rounded) <= dc_stock:
                             best_targets = test_targets
                             best_rounded = test_rounded
                             raw_allocation = test_raw
                             low = mid
                         else:
                             high = mid
-                            
-                    remainder = int(dc_stock - best_rounded.sum())
+
+                    remainder = int(dc_stock - np.nansum(best_rounded))
                 else:
                     best_rounded = rounded_req.copy()
                     best_targets = initial_targets.copy()
                     raw_allocation = raw_req.copy()
-                    remainder = int(dc_stock - best_rounded.sum())
+                    remainder = int(dc_stock - np.nansum(best_rounded))
 
-                temp_group = branch_group.copy()
-                temp_group['Rank'] = temp_group[rank_lookup_col].map(lambda x: rank_data.get(str(x).strip(), 999))
-                
+                best_rounded = best_rounded.copy()
+                temp_group = branch_group[[plant_col, 'daily_consumption']].copy()
+                temp_group['Rank'] = temp_group[plant_col].map(lambda x: rank_data.get(str(x).strip(), 999))
+                bg_pos = pd.Series(np.arange(len(branch_group)), index=branch_group.index)
+
                 # الدورة الأولى: سد العجز الفعلي في المطلوب المطلق
                 unfulfilled = absolute_full_req - best_rounded
                 unfulfilled[unfulfilled < 0] = 0
 
-                if remainder > 0 and unfulfilled.sum() > 0:
+                if remainder > 0 and np.nansum(unfulfilled) > 0:
                     temp_group['Unfulfilled'] = unfulfilled
                     sorted_idx = temp_group[temp_group['Unfulfilled'] > 0].sort_values(by=['daily_consumption', 'Rank'], ascending=[False, True]).index
-                    for current_idx in sorted_idx:
+                    for current_pos in bg_pos[sorted_idx].to_numpy():
                         if remainder <= 0: break
-                        needed = float(temp_group.loc[current_idx, 'Unfulfilled'])
+                        needed = float(unfulfilled[current_pos])
                         taken = int(min(needed, remainder))
-                        best_rounded.loc[current_idx] += taken
+                        best_rounded[current_pos] += taken
                         remainder -= taken
 
                 # الدورة الثانية: التفريغ الإجباري (ملغية لعائلة الـ Similar بالكامل بفضل الشرط اللي فوق)
                 if remainder > 0 and force_drain_allowed:
                     temp_group['Has_Need'] = absolute_full_req > 0
                     sorted_idx = temp_group[temp_group['Has_Need']].sort_values(by=['daily_consumption', 'Rank'], ascending=[False, True]).index
-                    if len(sorted_idx) > 0:
-                        while remainder > 0:
-                            for current_idx in sorted_idx:
-                                if remainder <= 0: break
-                                best_rounded.loc[current_idx] += 1
-                                remainder -= 1
+                    order = bg_pos[sorted_idx].to_numpy()
+                    if len(order) > 0:
+                        # Round-robin one unit at a time in priority order until the DC stock is used up.
+                        full_rounds, extra = divmod(remainder, len(order))
+                        best_rounded[order] += full_rounds
+                        best_rounded[order[:extra]] += 1
+                        remainder = 0
 
                 branch_group['Final Allocated Target Days'] = best_targets
                 branch_group['rounded up required'] = best_rounded
                 branch_group['required'] = raw_allocation
 
-                group['required'] = 0.0
-                group['rounded up required'] = 0.0
-
                 dc_stock_dict = {}
+                g_dc_raw = group['Dc Stock'].to_numpy()
+                g_dc_pend = group['Pending preparation from DC'].to_numpy() if 'Pending preparation from DC' in group.columns else None
                 for m in group['temp_mat'].unique():
-                    m_rows = group[group['temp_mat'] == m]
-                    m_raw = m_rows['Dc Stock'].iloc[0]
-                    m_pend = m_rows['Pending preparation from DC'].iloc[0] if 'Pending preparation from DC' in m_rows.columns else 0
+                    first = np.flatnonzero(g_mats == m)[0]
+                    m_raw = g_dc_raw[first]
+                    m_pend = g_dc_pend[first] if g_dc_pend is not None else 0
                     dc_stock_dict[m] = max(0, m_raw - m_pend)
 
                 # أولوية توزيع الأصناف: الـ Similar الأول ثم الـ Main
@@ -564,13 +570,19 @@ def process_replenishment(
 
                 # التوزيع حسب الأكثر استهلاكاً
                 sorted_bg = branch_group.sort_values(by='daily_consumption', ascending=False)
-                
+
                 alloc_dict = dict(zip(sorted_bg[plant_col], sorted_bg['rounded up required']))
                 targets_dict = dict(zip(sorted_bg[plant_col], sorted_bg['Final Allocated Target Days']))
-                
+                raw_need_by_branch = {}
+                for b_name, raw_need in zip(branch_group[plant_col], branch_group['required']):
+                    raw_need_by_branch.setdefault(b_name, raw_need)
+
+                g_rounded = np.zeros(len(group))
+                g_required = np.zeros(len(group))
+                g_fatd = group['Final Allocated Target Days'].to_numpy(dtype=float).copy()
                 for b_name, total_rounded_need in alloc_dict.items():
-                    group_mask = group[plant_col] == b_name
-                    group.loc[group_mask, 'Final Allocated Target Days'] = float(targets_dict.get(b_name, 0))
+                    b_rows = g_plants == b_name
+                    g_fatd[b_rows] = float(targets_dict.get(b_name, 0))
 
                     if total_rounded_need <= 0:
                         continue
@@ -584,16 +596,19 @@ def process_replenishment(
                             continue
 
                         take = int(min(remaining_to_fulfill, m_avail))
-                        idx = group[(group[plant_col] == b_name) & (group['temp_mat'] == m_code)].index
+                        idx = b_rows & (g_mats == m_code)
 
-                        group.loc[idx, 'rounded up required'] += take
-                        raw_need = branch_group.loc[branch_group[plant_col] == b_name, 'required'].iloc[0]
+                        g_rounded[idx] += take
+                        raw_need = raw_need_by_branch[b_name]
                         if total_rounded_need > 0:
-                            group.loc[idx, 'required'] += (take / total_rounded_need) * raw_need
+                            g_required[idx] += (take / total_rounded_need) * raw_need
 
                         dc_stock_dict[m_code] -= take
                         remaining_to_fulfill -= take
-                        
+
+                group['Final Allocated Target Days'] = g_fatd
+                group['required'] = g_required
+                group['rounded up required'] = g_rounded
                 return group
 
             if 'Material' in df.columns:
@@ -747,19 +762,20 @@ def process_replenishment(
                 current_sheet += 1
                 _progress(progress_callback, 0.9 + (0.1 * (current_sheet / total_sheets)), f"Saving Sheet: {sheet_name} ({current_sheet}/{total_sheets})...")
 
-            with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+            workbook, formats = streaming_workbook(buf)
+            try:
                 update_save_progress("Final Requirement")
-                main_output.to_excel(writer, sheet_name="Final Requirement", index=False)
+                stream_sheet(workbook, "Final Requirement", main_output, formats)
                 update_save_progress("Branch Summary")
-                summary_data.to_excel(writer, sheet_name="Branch Summary", index=False)
+                stream_sheet(workbook, "Branch Summary", summary_data, formats)
                 update_save_progress("DC Stock Summary")
-                dc_summary.to_excel(writer, sheet_name="DC Stock Summary", index=False)
+                stream_sheet(workbook, "DC Stock Summary", dc_summary, formats)
                 if not adjusted_df.empty:
                     update_save_progress("Adjusted Items")
-                    adjusted_df.to_excel(writer, sheet_name="Adjusted Items", index=False)
+                    stream_sheet(workbook, "Adjusted Items", adjusted_df, formats)
                 if not df_blocked_output.empty:
                     update_save_progress("Blocked Items")
-                    df_blocked_output.to_excel(writer, sheet_name="Blocked Items", index=False)
+                    stream_sheet(workbook, "Blocked Items", df_blocked_output, formats)
                 if similar_df is not None:
                     _progress(progress_callback, 0.98, "Preparing Similars Sheet data...")
                     m_main_col = next((c for c in similar_df.columns if "main" in c.lower() and "material" in c.lower() and "desc" not in c.lower()), similar_df.columns[0])
@@ -776,7 +792,9 @@ def process_replenishment(
                     df_sim_detailed = df_all_for_similars[clean_materials.isin(all_sim_main_codes)].copy()
                     df_sim_detailed = df_sim_detailed.sort_values(by=["Material"])
                     update_save_progress("Similars")
-                    df_sim_detailed.to_excel(writer, sheet_name="Similars", index=False)
+                    stream_sheet(workbook, "Similars", df_sim_detailed, formats)
+            finally:
+                workbook.close()
             _progress(progress_callback, 1.0, "Export completed")
             buf.seek(0)
             return buf.getvalue()

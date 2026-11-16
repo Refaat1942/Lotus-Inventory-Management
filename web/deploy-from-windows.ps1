@@ -47,7 +47,7 @@ ssh "${VpsUser}@${VpsHost}" @"
 if [ -x $RemoteDir/setup-vps.sh ] && [ ! -d $RemoteDir/venv ]; then
   chmod +x $RemoteDir/setup-vps.sh && bash $RemoteDir/setup-vps.sh
 else
-  source $RemoteDir/venv/bin/activate && pip install -r $RemoteDir/requirements.txt -q
+  source $RemoteDir/venv/bin/activate && pip install -r $RemoteDir/requirements.txt -q && (pip install -q python-calamine || true)
   systemctl restart lotus-inventory
   sleep 2
   systemctl status lotus-inventory --no-pager

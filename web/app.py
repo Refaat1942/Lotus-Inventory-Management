@@ -48,7 +48,10 @@ from engine import (
     process_inventory,
     template_excel_bytes,
 )
-from engine_jobs import create_job, get_job, get_job_file, launch_job, start_job
+from engine_jobs import create_job, get_job, get_job_file, launch_job
+from excel_io import floatify_numeric_columns, read_excel_fast
+from purchase_job import run_purchase_job
+from replenishment_job import merge_uploaded_targets, run_replenishment_job
 from replenishment_engine import (
     APP_VERSION as REPLENISHMENT_VERSION,
     TEMPLATES as REPL_TEMPLATES,
@@ -329,16 +332,6 @@ async def download_history(request: Request, user=Depends(require_permission("hi
     )
 
 
-def floatify_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Convert Excel nullable Int64 qty columns to float64 (skip booleans)."""
-    for col in df.columns:
-        if pd.api.types.is_bool_dtype(df[col]):
-            continue
-        if pd.api.types.is_integer_dtype(df[col]):
-            df[col] = pd.to_numeric(df[col], errors="coerce").astype(float)
-    return df
-
-
 async def _read_excel(upload: UploadFile | None) -> pd.DataFrame | None:
     if upload is None or not upload.filename:
         return None
@@ -352,7 +345,7 @@ async def _read_excel(upload: UploadFile | None) -> pd.DataFrame | None:
             detail=f"File too large ({upload.filename}). Maximum size is 120 MB.",
         )
     try:
-        df = pd.read_excel(io.BytesIO(data), engine="openpyxl")
+        df = read_excel_fast(io.BytesIO(data))
     except Exception as exc:
         raise HTTPException(
             status_code=400,
@@ -375,53 +368,6 @@ async def _save_upload(upload: UploadFile | None, dest: Path) -> None:
             detail=f"File too large ({upload.filename}). Maximum size is 120 MB.",
         )
     dest.write_bytes(data)
-
-
-def _read_excel_path(path: Path) -> pd.DataFrame | None:
-    if not path.is_file():
-        return None
-    try:
-        df = pd.read_excel(path, engine="openpyxl")
-    except Exception as exc:
-        raise ValueError(f"Could not read Excel file '{path.name}': {exc}") from exc
-    return floatify_numeric_columns(df)
-
-
-def load_engine_inputs_from_dir(job_dir: Path) -> dict:
-    main_df = _read_excel_path(job_dir / "main.xlsx")
-    if main_df is None:
-        raise ValueError("Main ERP Sheet missing or invalid")
-
-    targets_df = _read_excel_path(job_dir / "targets.xlsx")
-    avoid_zero_df = _read_excel_path(job_dir / "avoid_zero.xlsx")
-    rank_df = _read_excel_path(job_dir / "rank.xlsx")
-    rank_data = parse_rank_df(rank_df) if rank_df is not None else {}
-
-    purchase_targets_df = _read_excel_path(job_dir / "purchase_targets.xlsx")
-    similar_df = _read_excel_path(job_dir / "similar.xlsx")
-
-    blocked_items, blocked_branches = set(), set()
-    blocked_df = _read_excel_path(job_dir / "blocked.xlsx")
-    if blocked_df is not None:
-        blocked_items, blocked_branches = parse_blocked_df(blocked_df)
-
-    blocked_os_items, blocked_os_branches = set(), set()
-    blocked_os_df = _read_excel_path(job_dir / "blocked_os.xlsx")
-    if blocked_os_df is not None:
-        blocked_os_items, blocked_os_branches = parse_blocked_df(blocked_os_df)
-
-    return {
-        "main_df": main_df,
-        "targets_df": targets_df,
-        "purchase_targets_df": purchase_targets_df,
-        "rank_data": rank_data,
-        "avoid_zero_df": avoid_zero_df,
-        "similar_df": similar_df,
-        "blocked_items": blocked_items,
-        "blocked_branches": blocked_branches,
-        "blocked_os_items": blocked_os_items,
-        "blocked_os_branches": blocked_os_branches,
-    }
 
 
 async def _load_engine_inputs(
@@ -564,7 +510,7 @@ async def run_engine_async(
     """Start engine in background; poll /api/process/async/{job_id} then download."""
     include_zero_overstock = zero_overstock.lower() in ("true", "1", "yes", "on")
     try:
-        job_id, job_dir = create_job()
+        job_id, job_dir = create_job("purchase")
         await _save_upload(main_file, job_dir / "main.xlsx")
         await _save_upload(targets_file, job_dir / "targets.xlsx")
         await _save_upload(rank_file, job_dir / "rank.xlsx")
@@ -574,27 +520,13 @@ async def run_engine_async(
         await _save_upload(blocked_os_file, job_dir / "blocked_os.xlsx")
         await _save_upload(similar_file, job_dir / "similar.xlsx")
 
-        def worker(progress_cb):
-            progress_cb(0.02, "Reading uploaded Excel files...")
-            inputs = load_engine_inputs_from_dir(job_dir)
-            progress_cb(0.05, "Running inventory engine...")
-            return process_inventory(
-                main_df=inputs["main_df"],
-                targets_df=inputs["targets_df"],
-                purchase_targets_df=inputs["purchase_targets_df"],
-                rank_data=inputs["rank_data"],
-                avoid_zero_df=inputs["avoid_zero_df"],
-                similar_df=inputs["similar_df"],
-                blocked_items=set(inputs["blocked_items"]),
-                blocked_branches=set(inputs["blocked_branches"]),
-                blocked_os_items=set(inputs["blocked_os_items"]),
-                blocked_os_branches=set(inputs["blocked_os_branches"]),
-                zero_overstock=include_zero_overstock,
-                sto_threshold=sto_threshold,
-                progress_callback=progress_cb,
-            )
-
-        launch_job(job_id, worker)
+        launch_job(
+            job_id,
+            run_purchase_job,
+            job_dir=str(job_dir),
+            zero_overstock=include_zero_overstock,
+            sto_threshold=sto_threshold,
+        )
         log_activity(user["id"], user["username"], "engine_run_async", job_id, _client_ip(request))
         return {"job_id": job_id, "version": APP_VERSION}
     except HTTPException:
@@ -607,7 +539,7 @@ async def run_engine_async(
 
 @app.get("/api/process/async/{job_id}")
 async def engine_job_status(job_id: str, user=Depends(require_permission("engine_run"))):
-    meta = get_job(job_id)
+    meta = get_job(job_id, "purchase")
     if not meta:
         raise HTTPException(status_code=404, detail="Job not found or expired")
     return {
@@ -627,12 +559,12 @@ async def engine_job_download(
     request: Request,
     user=Depends(require_permission("engine_run")),
 ):
-    meta = get_job(job_id)
+    meta = get_job(job_id, "purchase")
     if not meta:
         raise HTTPException(status_code=404, detail="Job not found or expired")
     if meta.get("status") != "done":
         raise HTTPException(status_code=409, detail=meta.get("message") or "Job not finished")
-    path = get_job_file(job_id)
+    path = get_job_file(job_id, "purchase")
     if not path:
         raise HTTPException(status_code=404, detail="Result file missing")
     filename = f"Lotus_Inventory_Decision_{datetime.now().strftime('%Y%m%d')}.xlsx"
@@ -690,26 +622,6 @@ async def repl_apply_targets(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _merge_uploaded_targets(targets: dict, main_df, targets_df) -> dict:
-    """Apply the uploaded targets file server-side so a run never depends on the
-    browser's branch boxes having been filled. Values typed in the UI win; a
-    branch/category left at 0 takes the value from the file."""
-    if targets_df is None:
-        return targets
-    merged = {k: dict(v) for k, v in (targets or {}).items()}
-    from_file = apply_targets_excel(targets_df, extract_branches(main_df), main_df)
-    for branch, vals in from_file.items():
-        entry = merged.setdefault(branch, {"pharma": 0.0, "non_pharma": 0.0})
-        for kind in ("pharma", "non_pharma"):
-            try:
-                current = float(entry.get(kind) or 0)
-            except (TypeError, ValueError):
-                current = 0.0
-            if current <= 0 and vals.get(kind, 0) > 0:
-                entry[kind] = vals[kind]
-    return merged
-
-
 @app.post("/api/replenishment/process")
 async def repl_run_engine(
     request: Request,
@@ -730,7 +642,7 @@ async def repl_run_engine(
 
     try:
         main_df = await _read_excel(main_file)
-        targets = _merge_uploaded_targets(targets, main_df, await _read_excel(targets_file))
+        targets = merge_uploaded_targets(targets, main_df, await _read_excel(targets_file))
         rank_df = await _read_excel(rank_file)
         rank_data = repl_parse_rank_df(rank_df) if rank_df is not None else {}
 
@@ -762,6 +674,74 @@ async def repl_run_engine(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Processing error: {exc}") from exc
+
+
+@app.post("/api/replenishment/process/async")
+async def repl_run_engine_async(
+    request: Request,
+    main_file: UploadFile = File(...),
+    branch_targets: str = Form(...),
+    targets_file: UploadFile | None = File(None),
+    rank_file: UploadFile | None = File(None),
+    blocked_file: UploadFile | None = File(None),
+    similar_file: UploadFile | None = File(None),
+    user=Depends(require_permission("replenishment_run")),
+):
+    """Start replenishment in the background; poll the status URL, then download."""
+    import json
+
+    try:
+        targets = json.loads(branch_targets)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid branch_targets JSON") from exc
+    try:
+        job_id, job_dir = create_job("replenishment")
+        await _save_upload(main_file, job_dir / "main.xlsx")
+        await _save_upload(targets_file, job_dir / "targets.xlsx")
+        await _save_upload(rank_file, job_dir / "rank.xlsx")
+        await _save_upload(blocked_file, job_dir / "blocked.xlsx")
+        await _save_upload(similar_file, job_dir / "similar.xlsx")
+        launch_job(job_id, run_replenishment_job, job_dir=str(job_dir), branch_targets=targets)
+        log_activity(user["id"], user["username"], "replenishment_run_async", job_id, _client_ip(request))
+        return {"job_id": job_id, "version": REPLENISHMENT_VERSION}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Upload error: {exc}") from exc
+
+
+@app.get("/api/replenishment/process/async/{job_id}")
+async def repl_job_status(job_id: str, user=Depends(require_permission("replenishment_run"))):
+    meta = get_job(job_id, "replenishment")
+    if not meta:
+        raise HTTPException(status_code=404, detail="Job not found or expired")
+    return {
+        "job_id": job_id,
+        "status": meta.get("status"),
+        "progress": meta.get("progress", 0),
+        "message": meta.get("message", ""),
+        "error": meta.get("error"),
+        "version": REPLENISHMENT_VERSION,
+    }
+
+
+@app.get("/api/replenishment/process/async/{job_id}/download")
+async def repl_job_download(job_id: str, request: Request, user=Depends(require_permission("replenishment_run"))):
+    meta = get_job(job_id, "replenishment")
+    if not meta:
+        raise HTTPException(status_code=404, detail="Job not found or expired")
+    if meta.get("status") != "done":
+        raise HTTPException(status_code=409, detail=meta.get("message") or "Job not finished")
+    path = get_job_file(job_id, "replenishment")
+    if not path:
+        raise HTTPException(status_code=404, detail="Result file missing")
+    filename = f"Replenishment_{datetime.now().strftime('%Y%m%d')}.xlsx"
+    log_activity(user["id"], user["username"], "replenishment_download", filename, _client_ip(request))
+    return FileResponse(
+        path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=filename,
+    )
 
 
 @app.get("/api/replenishment/history")

@@ -424,27 +424,66 @@ document.getElementById("runBtn").addEventListener("click", async () => {
 
   const panel = document.getElementById("progressPanel");
   const fill = document.getElementById("progressFill");
+  const progressText = document.getElementById("progressText");
   panel.classList.remove("hidden");
-  document.getElementById("progressText").textContent = "Running replenishment engine...";
-  fill.style.width = "30%";
+  progressText.textContent = "Uploading files to server…";
+  fill.style.width = "5%";
   document.getElementById("runBtn").disabled = true;
+  let failed = false;
 
   try {
-    const res = await api("/api/replenishment/process", { method: "POST", body: form });
-    fill.style.width = "90%";
-    if (!res.ok) throw new Error((await res.json()).detail || "Processing failed");
+    // The engine runs in the background on the server; we poll its progress,
+    // so large datasets never hit a browser/HTTP timeout.
+    const startRes = await api("/api/replenishment/process/async", { method: "POST", body: form, timeoutMs: 3600000 });
+    if (!startRes.ok) throw new Error((await startRes.json().catch(() => ({}))).detail || "Could not start engine");
+    const { job_id } = await startRes.json();
+    await pollReplJob(job_id, fill, progressText);
+    progressText.textContent = "Downloading result…";
+    const res = await api(`/api/replenishment/process/async/${job_id}/download`, { timeoutMs: 600000 });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "Download failed");
     await downloadBlob(res, "Replenishment_Results.xlsx");
     fill.style.width = "100%";
-    document.getElementById("progressText").textContent = "Export completed";
+    progressText.textContent = "Export completed";
     showToast("Results exported successfully");
   } catch (err) {
+    failed = true;
     showToast(err.message, "error");
-    document.getElementById("progressText").textContent = err.message;
+    progressText.textContent = err.message;
   } finally {
-    setTimeout(() => panel.classList.add("hidden"), 1500);
-    fill.style.width = "0%";
+    setTimeout(() => {
+      panel.classList.add("hidden");
+      fill.style.width = "0%";
+    }, failed ? 10000 : 1500);
     updateRunButton();
   }
 });
+
+async function pollReplJob(jobId, fill, progressText) {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const MAX_FAILURE_MS = 180000;
+  let failingSince = null;
+  for (;;) {
+    await sleep(2000);
+    let res = null;
+    try {
+      res = await api(`/api/replenishment/process/async/${jobId}`, { timeoutMs: 30000 });
+    } catch (err) {
+      if (err.message === "Session expired") throw err;
+    }
+    if (res && res.status === 404) throw new Error("This run is no longer on the server — please run the engine again");
+    if (!res || !res.ok) {
+      failingSince = failingSince || Date.now();
+      if (Date.now() - failingSince > MAX_FAILURE_MS) throw new Error("Lost connection to the server — please try again");
+      progressText.textContent = "Reconnecting to server… (the engine keeps running)";
+      continue;
+    }
+    failingSince = null;
+    const st = await res.json();
+    fill.style.width = `${Math.max(8, Math.min(98, (st.progress || 0) * 100))}%`;
+    progressText.textContent = st.message || st.status || "Processing…";
+    if (st.status === "done") return st;
+    if (st.status === "failed") throw new Error(st.message || st.error || "Engine failed");
+  }
+}
 
 initSession();

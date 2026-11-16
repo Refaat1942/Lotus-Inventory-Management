@@ -6,7 +6,7 @@ const MODULES = [
     desc: "Smart inventory engine — upload ERP data, run purchase decisions, and export results.",
     icon: "🛒",
     href: "/purchase",
-    accent: "#1e8449",
+    accent: "#10b981",
   },
   {
     id: "replenishment",
@@ -15,7 +15,7 @@ const MODULES = [
     desc: "Branch replenishment engine — configure targets, allocate DC stock, and export requirements.",
     icon: "📦",
     href: "/replenishment",
-    accent: "#2980b9",
+    accent: "#0ea5e9",
   },
 ];
 
@@ -25,7 +25,7 @@ const SETTINGS_MODULE = {
   desc: "Admin only — manage users, module permissions, branding, reports, and activity logs.",
   icon: "⚙️",
   href: "/settings",
-  accent: "#6c5ce7",
+  accent: "#8b5cf6",
 };
 
 async function api(url, options = {}) {
