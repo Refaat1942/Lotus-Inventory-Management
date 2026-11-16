@@ -11,7 +11,7 @@ import pandas as pd
 
 from excel_io import stream_sheet, streaming_workbook
 
-APP_VERSION = "v2.1.9 (Web)"
+APP_VERSION = "v2.1.10 (Web)"
 DB_NAME = os.path.join(os.path.dirname(__file__), "lotus_replenishment_history.db")
 
 TEMPLATES = {

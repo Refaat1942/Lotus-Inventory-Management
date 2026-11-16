@@ -1,5 +1,6 @@
 """Lotus Inventory Management — Web Application."""
 import io
+import os
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -48,7 +49,7 @@ from engine import (
     process_inventory,
     template_excel_bytes,
 )
-from engine_jobs import create_job, get_job, get_job_file, launch_job
+from engine_jobs import create_job, fail_job, get_job, get_job_file, launch_job
 from excel_io import floatify_numeric_columns, read_excel_fast
 from purchase_job import run_purchase_job
 from replenishment_job import merge_uploaded_targets, run_replenishment_job
@@ -65,6 +66,10 @@ from replenishment_engine import (
 )
 
 app = FastAPI(title="Lotus Inventory Management", version=APP_VERSION)
+
+# A 1,000,000-row ERP sheet is roughly 100 MB as .xlsx; leave headroom for wider sheets.
+MAX_UPLOAD_MB = int(os.getenv("LOTUS_MAX_UPLOAD_MB", "300"))
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -338,11 +343,10 @@ async def _read_excel(upload: UploadFile | None) -> pd.DataFrame | None:
     data = await upload.read()
     if not data:
         raise HTTPException(status_code=400, detail=f"Empty file: {upload.filename}")
-    max_bytes = 120 * 1024 * 1024
-    if len(data) > max_bytes:
+    if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(
             status_code=413,
-            detail=f"File too large ({upload.filename}). Maximum size is 120 MB.",
+            detail=f"File too large ({upload.filename}). Maximum size is {MAX_UPLOAD_MB} MB.",
         )
     try:
         df = read_excel_fast(io.BytesIO(data))
@@ -355,19 +359,24 @@ async def _read_excel(upload: UploadFile | None) -> pd.DataFrame | None:
 
 
 async def _save_upload(upload: UploadFile | None, dest: Path) -> None:
-    """Save raw upload bytes to disk (fast — no Excel parsing on the request thread)."""
+    """Copy an upload to disk in chunks (never holds a whole large sheet in RAM)."""
     if upload is None or not upload.filename:
         return
-    data = await upload.read()
-    if not data:
+    size = 0
+    with dest.open("wb") as out:
+        while chunk := await upload.read(1024 * 1024):
+            size += len(chunk)
+            if size > MAX_UPLOAD_BYTES:
+                out.close()
+                dest.unlink(missing_ok=True)
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File too large ({upload.filename}). Maximum size is {MAX_UPLOAD_MB} MB.",
+                )
+            out.write(chunk)
+    if size == 0:
+        dest.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=f"Empty file: {upload.filename}")
-    max_bytes = 120 * 1024 * 1024
-    if len(data) > max_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large ({upload.filename}). Maximum size is 120 MB.",
-        )
-    dest.write_bytes(data)
 
 
 async def _load_engine_inputs(
@@ -509,6 +518,7 @@ async def run_engine_async(
 ):
     """Start engine in background; poll /api/process/async/{job_id} then download."""
     include_zero_overstock = zero_overstock.lower() in ("true", "1", "yes", "on")
+    job_id = None
     try:
         job_id, job_dir = create_job("purchase")
         await _save_upload(main_file, job_dir / "main.xlsx")
@@ -529,11 +539,17 @@ async def run_engine_async(
         )
         log_activity(user["id"], user["username"], "engine_run_async", job_id, _client_ip(request))
         return {"job_id": job_id, "version": APP_VERSION}
-    except HTTPException:
+    except HTTPException as exc:
+        if job_id:
+            fail_job(job_id, str(exc.detail))
         raise
     except ValueError as exc:
+        if job_id:
+            fail_job(job_id, str(exc))
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
+        if job_id:
+            fail_job(job_id, f"Upload error: {exc}")
         raise HTTPException(status_code=500, detail=f"Upload error: {exc}") from exc
 
 
@@ -569,13 +585,13 @@ async def engine_job_download(
         raise HTTPException(status_code=404, detail="Result file missing")
     filename = f"Lotus_Inventory_Decision_{datetime.now().strftime('%Y%m%d')}.xlsx"
     log_activity(user["id"], user["username"], "engine_download", filename, _client_ip(request))
-    content = path.read_bytes()
-    if not content:
+    if path.stat().st_size == 0:
         raise HTTPException(status_code=500, detail="Result file is empty")
-    return Response(
-        content=content,
+    # Streamed from disk: results for 1M-row sheets are ~200 MB.
+    return FileResponse(
+        path,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        filename=filename,
     )
 
 
@@ -694,6 +710,7 @@ async def repl_run_engine_async(
         targets = json.loads(branch_targets)
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail="Invalid branch_targets JSON") from exc
+    job_id = None
     try:
         job_id, job_dir = create_job("replenishment")
         await _save_upload(main_file, job_dir / "main.xlsx")
@@ -704,9 +721,13 @@ async def repl_run_engine_async(
         launch_job(job_id, run_replenishment_job, job_dir=str(job_dir), branch_targets=targets)
         log_activity(user["id"], user["username"], "replenishment_run_async", job_id, _client_ip(request))
         return {"job_id": job_id, "version": REPLENISHMENT_VERSION}
-    except HTTPException:
+    except HTTPException as exc:
+        if job_id:
+            fail_job(job_id, str(exc.detail))
         raise
     except Exception as exc:
+        if job_id:
+            fail_job(job_id, f"Upload error: {exc}")
         raise HTTPException(status_code=500, detail=f"Upload error: {exc}") from exc
 
 

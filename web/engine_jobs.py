@@ -150,6 +150,11 @@ def launch_job(job_id: str, target: Callable, **kwargs) -> None:
     threading.Thread(target=supervise, daemon=True).start()
 
 
+def fail_job(job_id: str, message: str) -> None:
+    """Mark a job that never launched (e.g. a rejected upload) as failed so it gets cleaned up."""
+    _write_status(job_id, status="failed", progress=0.0, message=message, error=message)
+
+
 def get_job(job_id: str, kind: Optional[str] = None) -> Optional[dict]:
     if not job_id or not all(c in "0123456789abcdef" for c in job_id):
         return None
