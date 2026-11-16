@@ -1,23 +1,34 @@
 :root {
-  --bg: #f4faf6;
-  --bg-soft: #e8f5ee;
+  --bg: #eef4f1;
+  --bg-soft: #e2efe8;
   --surface: #ffffff;
-  --surface-2: #f0f7f3;
-  --text: #1a2e24;
-  --muted: #5c7368;
-  --accent: #1e8449;
-  --accent-hover: #27ae60;
-  --accent-light: #d5f0e0;
-  --accent-glow: rgba(30, 132, 73, 0.18);
-  --success: #1e8449;
-  --success-light: #e9f7ef;
-  --purple: #6c5ce7;
+  --surface-2: #f3f7f5;
+  --text: #13261d;
+  --muted: #4f665b;
+  --accent: #0f7a3f;
+  --accent-hover: #0b6634;
+  --accent-light: #d3eedd;
+  --accent-glow: rgba(15, 122, 63, 0.22);
+  --success: #0f7a3f;
+  --success-light: #e3f5ea;
+  --purple: #6d28d9;
   --danger: #c0392b;
-  --border: #d4e8dc;
+  --border: #d3e2da;
   --sidebar-w: 280px;
   --radius: 14px;
-  --shadow: 0 4px 24px rgba(30, 132, 73, 0.08);
+  --shadow: 0 6px 24px rgba(19, 38, 29, 0.08);
   --font: "DM Sans", "Segoe UI", system-ui, sans-serif;
+
+  /* Cheerful palette: each step / file / button gets its own colour */
+  --c-blue: #3b82f6;   --c-blue-soft: #e3eeff;
+  --c-violet: #8b5cf6; --c-violet-soft: #efe8ff;
+  --c-amber: #f97316;  --c-amber-soft: #ffeddc;
+  --c-teal: #14b8a6;   --c-teal-soft: #d9f7f2;
+  --c-rose: #ec4899;   --c-rose-soft: #ffe3f1;
+  --c-green: #10b981;  --c-green-soft: #dcf8ec;
+  --c-yellow: #eab308; --c-yellow-soft: #fff6cc;
+  --c-sky: #0ea5e9;    --c-sky-soft: #ddf3fd;
+  --sidebar-bg: linear-gradient(175deg, #0b3b26 0%, #0f5132 55%, #13673f 100%);
 }
 
 * { box-sizing: border-box; }
@@ -645,3 +656,218 @@ fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 12px; 
 @media (max-width: 640px) {
   .app-version-corner { top: auto; bottom: 8px; right: 8px; }
 }
+
+
+/* =========================================================================
+   Colour refresh: stronger contrast and a distinct colour per step / file
+   ========================================================================= */
+
+/* Background glows */
+.orb-1 { width: 520px; height: 520px; background: rgba(13, 148, 136, 0.18); top: -160px; right: -80px; }
+.orb-2 { width: 420px; height: 420px; background: rgba(124, 58, 237, 0.12); bottom: -120px; left: 180px; }
+.app-bg::after {
+  content: "";
+  position: fixed;
+  width: 380px; height: 380px;
+  top: 35%; left: 45%;
+  border-radius: 50%;
+  filter: blur(110px);
+  background: rgba(37, 99, 235, 0.10);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Sidebar: deep green with white text */
+.sidebar {
+  background: var(--sidebar-bg);
+  border-right: none;
+  box-shadow: 4px 0 24px rgba(11, 59, 38, 0.25);
+  color: #eaf7ef;
+}
+.sidebar-brand, .sidebar-user { border-color: rgba(255, 255, 255, 0.14); }
+.sidebar-titles h1 { color: #fff; }
+.sidebar-titles p { color: rgba(234, 247, 239, 0.75); }
+.sidebar .logo { border-color: rgba(255, 255, 255, 0.35); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25); }
+.sidebar .nav-item { color: #eaf7ef; }
+.sidebar .nav-text small { color: rgba(234, 247, 239, 0.7); }
+.sidebar .nav-item:hover { background: rgba(255, 255, 255, 0.10); border-color: rgba(255, 255, 255, 0.18); }
+.sidebar .nav-item.active {
+  background: #fff;
+  color: var(--accent);
+  border-color: #fff;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+}
+.sidebar .nav-item.active small { color: var(--muted); }
+.sidebar .user-badge { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.sidebar .btn-ghost { background: transparent; color: #fff; border-color: rgba(255, 255, 255, 0.35); }
+.sidebar .btn-ghost:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); }
+
+/* Page title */
+.topbar h2 {
+  background: linear-gradient(90deg, var(--accent), var(--c-teal));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-size: 1.65rem;
+}
+
+/* Steps: each step has its own colour (tracker, card stripe, badge) */
+.journey-step[data-step="1"] { --step: var(--c-sky);    --step-soft: var(--c-sky-soft); }
+.journey-step[data-step="2"] { --step: var(--c-rose);   --step-soft: var(--c-rose-soft); }
+.journey-step[data-step="3"] { --step: var(--c-amber);  --step-soft: var(--c-amber-soft); }
+.journey-step[data-step="4"] { --step: var(--c-green);  --step-soft: var(--c-green-soft); }
+.journey-step span { border-color: var(--step, var(--border)); color: var(--step, var(--muted)); background: var(--step-soft, var(--surface-2)); }
+.journey-step.active { color: var(--step, var(--accent)); }
+.journey-step.active span { background: var(--step, var(--accent)); border-color: var(--step, var(--accent)); color: #fff; box-shadow: 0 0 0 4px var(--step-soft, var(--accent-light)); }
+.journey-step.done span { background: var(--step, var(--accent)); border-color: var(--step, var(--accent)); color: #fff; opacity: 0.85; }
+.journey-line { height: 3px; border-radius: 3px; background: linear-gradient(90deg, var(--c-sky), var(--c-rose), var(--c-amber), var(--c-green)); opacity: 0.5; }
+
+#templatesSection { --step: var(--c-sky);    --step-soft: var(--c-sky-soft); }
+#uploadSection    { --step: var(--c-rose);   --step-soft: var(--c-rose-soft); }
+#configSection, #branchSection { --step: var(--c-amber); --step-soft: var(--c-amber-soft); }
+#actionsSection   { --step: var(--c-green);  --step-soft: var(--c-green-soft); }
+.card { border-top: 4px solid var(--step, var(--accent)); }
+.card .badge { background: var(--step-soft, var(--accent-light)); color: var(--step, var(--accent)); }
+.card-head h3 { color: var(--text); }
+
+/* Template buttons: one colour each */
+.template-grid > .btn-template:nth-child(8n+1) { background: var(--c-blue); }
+.template-grid > .btn-template:nth-child(8n+2) { background: var(--c-rose); }
+.template-grid > .btn-template:nth-child(8n+3) { background: var(--c-teal); }
+.template-grid > .btn-template:nth-child(8n+4) { background: var(--c-amber); }
+.template-grid > .btn-template:nth-child(8n+5) { background: var(--c-violet); }
+.template-grid > .btn-template:nth-child(8n+6) { background: var(--c-green); }
+.template-grid > .btn-template:nth-child(8n+7) { background: var(--c-sky); }
+.template-grid > .btn-template:nth-child(8n+8) { background: var(--c-yellow); }
+.btn-template { box-shadow: 0 3px 10px rgba(19, 38, 29, 0.12); }
+.btn-template:hover:not(:disabled) { filter: brightness(1.08); }
+
+/* Upload tiles: tinted per file, solid colour once loaded */
+.upload-grid > .upload-item:nth-child(8n+1) { --tile: var(--c-green); --tile-soft: var(--c-green-soft); }
+.upload-grid > .upload-item:nth-child(8n+2) { --tile: var(--c-sky); --tile-soft: var(--c-sky-soft); }
+.upload-grid > .upload-item:nth-child(8n+3) { --tile: var(--c-rose); --tile-soft: var(--c-rose-soft); }
+.upload-grid > .upload-item:nth-child(8n+4) { --tile: var(--c-amber); --tile-soft: var(--c-amber-soft); }
+.upload-grid > .upload-item:nth-child(8n+5) { --tile: var(--c-violet); --tile-soft: var(--c-violet-soft); }
+.upload-grid > .upload-item:nth-child(8n+6) { --tile: var(--c-teal); --tile-soft: var(--c-teal-soft); }
+.upload-grid > .upload-item:nth-child(8n+7) { --tile: var(--c-yellow); --tile-soft: var(--c-yellow-soft); }
+.upload-grid > .upload-item:nth-child(8n+8) { --tile: var(--c-blue); --tile-soft: var(--c-blue-soft); }
+.upload-item label { color: var(--tile, var(--text)); }
+.upload-item .file-drop { background: var(--tile-soft, var(--surface-2)); border-color: color-mix(in srgb, var(--tile, var(--border)) 35%, transparent); }
+.upload-item .file-drop:hover, .upload-item .file-drop.dragover { border-color: var(--tile, var(--accent)); background: var(--tile-soft, var(--success-light)); box-shadow: 0 4px 14px color-mix(in srgb, var(--tile, var(--accent)) 25%, transparent); }
+.upload-item .file-drop.loaded { border-style: solid; border-color: var(--tile, var(--accent)); background: var(--tile, var(--accent)); color: #fff; }
+.upload-item .file-drop.loaded .filename { color: rgba(255, 255, 255, 0.9); font-weight: 600; }
+
+/* Buttons */
+.btn-primary, .btn-success { background: linear-gradient(135deg, var(--accent), var(--c-teal)); color: #fff; }
+.btn-primary:hover:not(:disabled), .btn-success:hover:not(:disabled) { background: linear-gradient(135deg, var(--accent-hover), var(--c-teal)); filter: brightness(1.05); }
+.btn-secondary { border-color: color-mix(in srgb, var(--c-blue) 30%, var(--border)); color: var(--c-blue); }
+.btn-secondary:hover:not(:disabled) { background: var(--c-blue-soft); }
+
+/* Progress bar: moving gradient */
+.progress-bar { height: 10px; background: #e3ebe7; }
+.progress-fill {
+  background: linear-gradient(90deg, var(--c-sky), var(--c-violet), var(--c-rose), var(--c-amber), var(--c-yellow), var(--c-green));
+  background-size: 300% 100%;
+  animation: progressFlow 2.4s linear infinite;
+}
+@keyframes progressFlow { from { background-position: 0% 0; } to { background-position: 300% 0; } }
+
+/* Stats and tables */
+.stats-grid > .stat-card:nth-child(4n+1) { border-top: 4px solid var(--c-blue); }
+.stats-grid > .stat-card:nth-child(4n+1) .stat-val { color: var(--c-blue); }
+.stats-grid > .stat-card:nth-child(4n+2) { border-top: 4px solid var(--c-violet); }
+.stats-grid > .stat-card:nth-child(4n+2) .stat-val { color: var(--c-violet); }
+.stats-grid > .stat-card:nth-child(4n+3) { border-top: 4px solid var(--c-amber); }
+.stats-grid > .stat-card:nth-child(4n+3) .stat-val { color: var(--c-amber); }
+.stats-grid > .stat-card:nth-child(4n+4) { border-top: 4px solid var(--c-teal); }
+.stats-grid > .stat-card:nth-child(4n+4) .stat-val { color: var(--c-teal); }
+.data-table th { background: #e6f0eb; color: #2c4a3c; }
+.data-table tbody tr:hover td { background: #f3f9f6; }
+
+/* Toasts */
+.toast { border-left: 5px solid var(--accent); }
+.toast.error { border-left-color: var(--danger); background: #fff3f1; }
+
+/* Login */
+.login-body {
+  background:
+    radial-gradient(circle at 15% 20%, rgba(13, 148, 136, 0.28), transparent 45%),
+    radial-gradient(circle at 85% 80%, rgba(124, 58, 237, 0.20), transparent 45%),
+    linear-gradient(160deg, #0b3b26 0%, #0f5132 45%, #12613d 100%);
+}
+.login-card { border: none; border-top: 6px solid transparent; border-image: linear-gradient(90deg, var(--c-sky), var(--c-violet), var(--c-rose), var(--c-amber), var(--c-yellow), var(--c-green)) 1; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35); }
+.login-footer { color: rgba(255, 255, 255, 0.8); }
+#loginTitle { color: var(--accent); }
+
+/* Module hub */
+.hub-header h1 { background: linear-gradient(90deg, var(--accent), var(--c-teal), var(--c-violet), var(--c-rose)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.module-card { border: none; border-top: 6px solid var(--module-accent, var(--accent)); background: linear-gradient(180deg, color-mix(in srgb, var(--module-accent, var(--accent)) 9%, #fff) 0%, #fff 55%); }
+.module-card:hover { box-shadow: 0 16px 40px color-mix(in srgb, var(--module-accent, var(--accent)) 30%, transparent); }
+
+/* Settings tabs */
+.module-tab.active { background: linear-gradient(135deg, var(--accent), var(--c-teal)); border-color: transparent; color: #fff; }
+
+/* Cheerful sidebar icons */
+.sidebar .nav-item .nav-icon { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: rgba(255, 255, 255, 0.14); }
+.sidebar-nav > .nav-item:nth-child(4n+1) .nav-icon { background: var(--c-amber); }
+.sidebar-nav > .nav-item:nth-child(4n+2) .nav-icon { background: var(--c-sky); }
+.sidebar-nav > .nav-item:nth-child(4n+3) .nav-icon { background: var(--c-rose); }
+.sidebar-nav > .nav-item:nth-child(4n+4) .nav-icon { background: var(--c-violet); }
+
+/* Soft multicoloured page background (app pages and hub) */
+body:not(.login-body) {
+  background: linear-gradient(135deg, #eaf6ff 0%, #fdeef7 32%, #fff3e6 64%, #e9fbf1 100%) fixed;
+}
+.module-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 72px;
+  height: 72px;
+  border-radius: 20px;
+  font-size: 2.4rem;
+  background: color-mix(in srgb, var(--module-accent, var(--accent)) 16%, #fff);
+}
+.module-cta {
+  align-self: flex-start;
+  padding: 8px 14px;
+  border-radius: 999px;
+  color: #fff;
+  background: var(--module-accent, var(--accent));
+}
+.app-version-corner { background: linear-gradient(90deg, #fff, #f5f0ff); border-color: #e5dcff; color: #5b4b8a; }
+
+/* Clear "uploaded" indicator on each upload tile */
+.file-drop.loaded::after {
+  content: "✓";
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--tile, var(--accent));
+  background: #fff;
+  border: 2px solid var(--tile, var(--accent));
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.18);
+  animation: popIn 0.35s ease;
+}
+.file-drop.loaded .drop-icon { font-size: 0; }
+.file-drop.loaded .drop-icon::before { content: "✅"; font-size: 1.15rem; }
+.file-drop.loaded > span:nth-of-type(2) { font-size: 0; }
+.file-drop.loaded > span:nth-of-type(2)::before { content: "Uploaded ✓"; font-size: 0.95rem; font-weight: 800; letter-spacing: 0.02em; }
+.upload-item:has(.file-drop.loaded) label::after {
+  content: "✓";
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #fff;
+  background: var(--tile, var(--accent));
+  padding: 1px 7px;
+  border-radius: 999px;
+  margin-left: 4px;
+  white-space: nowrap;
+}
+@keyframes popIn { from { transform: scale(0.3); opacity: 0; } to { transform: scale(1); opacity: 1; } }

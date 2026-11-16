@@ -22,6 +22,7 @@ fi
 echo "==> Updating dependencies..."
 source "$APP_DIR/venv/bin/activate"
 pip install -r requirements.txt -q
+pip install -q python-calamine || echo "  (python-calamine unavailable — using the slower Excel reader)"
 
 echo "==> Restarting service..."
 systemctl restart lotus-inventory

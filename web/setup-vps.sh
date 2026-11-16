@@ -29,6 +29,7 @@ python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
+pip install -q python-calamine || echo "  (python-calamine unavailable — using the slower Excel reader)"
 
 mkdir -p data/branding
 

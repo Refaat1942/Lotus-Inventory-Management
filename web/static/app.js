@@ -119,10 +119,31 @@ async function downloadEngineResult(jobId) {
 
 async function pollJobUntilDone(jobId, fill, progressText) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  for (let i = 0; i < 3600; i++) {
+  // A single failed status check (network blip, busy server) must not abort the
+  // run: the engine keeps working on the server, so keep retrying for a while.
+  const MAX_FAILURE_MS = 180000;
+  let failingSince = null;
+  for (let i = 0; i < 7200; i++) {
     await sleep(2000);
-    const stRes = await api(`/api/process/async/${jobId}`, { timeoutMs: 120000 });
-    if (!stRes.ok) throw new Error("Lost connection while processing");
+    let stRes;
+    try {
+      stRes = await api(`/api/process/async/${jobId}`, { timeoutMs: 30000 });
+    } catch (err) {
+      if (err.message === "Session expired" || err.message === "Access denied") throw err;
+      stRes = null;
+    }
+    if (stRes && stRes.status === 404) {
+      throw new Error("This run is no longer on the server — please run the engine again");
+    }
+    if (!stRes || !stRes.ok) {
+      failingSince = failingSince || Date.now();
+      if (Date.now() - failingSince > MAX_FAILURE_MS) {
+        throw new Error("Lost connection to the server — refresh the page and click Download Excel Result if the run finished");
+      }
+      progressText.textContent = "Reconnecting to server… (the engine keeps running)";
+      continue;
+    }
+    failingSince = null;
     const st = await stRes.json();
     const pct = Math.max(10, Math.min(98, (st.progress || 0) * 100));
     fill.style.width = `${pct}%`;

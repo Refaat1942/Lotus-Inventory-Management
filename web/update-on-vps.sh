@@ -18,6 +18,7 @@ cp -r "$TMP"/Lotus-Inventory-Management-main/web/* "$APP_DIR/"
 echo "==> Installing dependencies..."
 source "$APP_DIR/venv/bin/activate"
 pip install -r "$APP_DIR/requirements.txt" -q
+pip install -q python-calamine || echo "  (python-calamine unavailable — using the slower Excel reader)"
 
 echo "==> Restarting lotus-inventory..."
 systemctl restart lotus-inventory
@@ -37,5 +38,5 @@ for i in $(seq 1 15); do
   sleep 1
 done
 echo ""
-echo "Purchase should be v9.8.7 (Web) — blocked+Display shelf qty fix."
+echo "Purchase should be v9.8.8 (Web) and Replenishment v2.1.9 (Web) — faster engines, background runs, new colours."
 echo "Open: http://187.124.177.138:10000/purchase — then Ctrl+F5 before testing."
