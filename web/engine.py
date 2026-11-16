@@ -13,7 +13,7 @@ from excel_io import stream_sheet, streaming_workbook
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "v9.8.8 (Web)"
+APP_VERSION = "v9.8.9 (Web)"
 DB_NAME = os.path.join(os.path.dirname(__file__), "lotus_inventory_history.db")
 
 TEMPLATES = {

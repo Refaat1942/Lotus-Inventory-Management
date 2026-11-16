@@ -38,5 +38,5 @@ for i in $(seq 1 15); do
   sleep 1
 done
 echo ""
-echo "Purchase should be v9.8.8 (Web) and Replenishment v2.1.9 (Web) — faster engines, background runs, new colours."
+echo "Purchase should be v9.8.9 (Web) and Replenishment v2.1.10 (Web) — up to ~1M-row sheets (300 MB uploads)."
 echo "Open: http://187.124.177.138:10000/purchase — then Ctrl+F5 before testing."
