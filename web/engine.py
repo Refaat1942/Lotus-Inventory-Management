@@ -13,7 +13,7 @@ from excel_io import stream_sheet, streaming_workbook
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "v9.8.9 (Web)"
+APP_VERSION = "v9.9.0 (Web)"
 DB_NAME = os.path.join(os.path.dirname(__file__), "lotus_inventory_history.db")
 
 TEMPLATES = {
@@ -932,13 +932,31 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
             dc_col = "Total Dc" if "Total Dc" in company_totals.columns else "Total_Dc"
             pending_dc_col = "Pending from DC" if "Pending from DC" in company_totals.columns else "Pending from DC"
 
+            # Pending from DC for the whole family: the main item's own value plus
+            # the values of all its similar items (each material's first row).
+            item_pending_dc = pd.to_numeric(company_totals[pending_dc_col], errors="coerce").fillna(0)
+            family_pending_dc = item_pending_dc.copy()
+            if similar_df is not None:
+                pending_by_mat = dict(zip(company_totals["Material"].astype(str), item_pending_dc))
+                sim_main_col = next((c for c in similar_df.columns if 'main' in c.lower() and 'material' in c.lower() and 'desc' not in c.lower()), similar_df.columns[0])
+                sim_sim_col = next((c for c in similar_df.columns if 'similar' in c.lower() and 'material' in c.lower() and 'desc' not in c.lower()), similar_df.columns[2])
+                fam = similar_df[[sim_main_col, sim_sim_col]].astype(str).apply(
+                    lambda col: col.str.replace(r'\.0$', '', regex=True).str.strip()
+                ).drop_duplicates()
+                fam = fam[(fam[sim_main_col] != fam[sim_sim_col]) & ~fam[sim_main_col].isin(["", "nan"]) & ~fam[sim_sim_col].isin(["", "nan"])]
+                sim_pending_by_main = (
+                    fam.assign(_p=fam[sim_sim_col].map(pending_by_mat).fillna(0))
+                    .groupby(sim_main_col)["_p"].sum()
+                )
+                family_pending_dc = item_pending_dc + company_totals["Material"].astype(str).map(sim_pending_by_main).fillna(0).to_numpy()
+
             company_totals["Company Purchase Quantity"] = (
                 pd.to_numeric(company_totals[purchase_req_col], errors="coerce").fillna(0)
                 - company_totals["Total Pulled Overstock"]
                 - pd.to_numeric(company_totals[open_po_col], errors="coerce").fillna(0)
                 - (
                     pd.to_numeric(company_totals[dc_col], errors="coerce").fillna(0)
-                    - pd.to_numeric(company_totals[pending_dc_col], errors="coerce").fillna(0)
+                    - family_pending_dc
                 )
             )
             company_totals["Company Purchase Quantity"] = safe_int_series(company_totals["Company Purchase Quantity"])
