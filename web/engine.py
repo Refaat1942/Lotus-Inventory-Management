@@ -500,6 +500,24 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
         company_totals["Material"] = company_totals["temp_mat"]
         company_totals.drop(columns=["temp_mat"], inplace=True)
 
+        # Pending from DC for the whole family: the main item's own value plus the
+        # values of all its similar items (each material's first row). Used for DC
+        # availability in the overstock/pullback rules (so pullbacks and branch
+        # transfers reflect it) and in the net company purchase quantity.
+        _item_pending = pd.to_numeric(company_totals["Total_Pending_From_DC"], errors="coerce").fillna(0)
+        family_pending_by_mat = dict(zip(company_totals["Material"].astype(str), _item_pending))
+        if similar_df is not None and not company_totals.empty:
+            _sim_main_col = next((c for c in similar_df.columns if 'main' in c.lower() and 'material' in c.lower() and 'desc' not in c.lower()), similar_df.columns[0])
+            _sim_sim_col = next((c for c in similar_df.columns if 'similar' in c.lower() and 'material' in c.lower() and 'desc' not in c.lower()), similar_df.columns[2])
+            _fam = similar_df[[_sim_main_col, _sim_sim_col]].astype(str).apply(
+                lambda col: col.str.replace(r'\.0$', '', regex=True).str.strip()
+            ).drop_duplicates()
+            _fam = _fam[(_fam[_sim_main_col] != _fam[_sim_sim_col]) & ~_fam[_sim_main_col].isin(["", "nan"]) & ~_fam[_sim_sim_col].isin(["", "nan"])]
+            _own_pending = dict(family_pending_by_mat)
+            for _main, _p in _fam.assign(_p=_fam[_sim_sim_col].map(_own_pending).fillna(0)).groupby(_sim_main_col)["_p"].sum().items():
+                if _main in family_pending_by_mat:
+                    family_pending_by_mat[_main] += _p
+
         # Keep every material that appears in All Items (no aggressive filter).
         # Company Totals = one row per material; All Items = branch rows for the same materials.
         company_totals['Pos/Neg'] = np.where(
@@ -520,7 +538,7 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
         def calculate_overstock_and_exclusion(row):
             pos = row['Final_Positive_REQ_Internal']
             neg = row['Final_Negative_REQ_Internal']
-            wh_stock = max(0, row['Total_Dc'] - row['Total_Pending_From_DC']) 
+            wh_stock = max(0, row['Total_Dc'] - family_pending_by_mat.get(str(row['Material']), row['Total_Pending_From_DC']))
                 
             if neg == 0: return 0, "No Negative Target"
                 
@@ -932,23 +950,8 @@ def process_inventory(main_df, targets_df=None, purchase_targets_df=None, rank_d
             dc_col = "Total Dc" if "Total Dc" in company_totals.columns else "Total_Dc"
             pending_dc_col = "Pending from DC" if "Pending from DC" in company_totals.columns else "Pending from DC"
 
-            # Pending from DC for the whole family: the main item's own value plus
-            # the values of all its similar items (each material's first row).
             item_pending_dc = pd.to_numeric(company_totals[pending_dc_col], errors="coerce").fillna(0)
-            family_pending_dc = item_pending_dc.copy()
-            if similar_df is not None:
-                pending_by_mat = dict(zip(company_totals["Material"].astype(str), item_pending_dc))
-                sim_main_col = next((c for c in similar_df.columns if 'main' in c.lower() and 'material' in c.lower() and 'desc' not in c.lower()), similar_df.columns[0])
-                sim_sim_col = next((c for c in similar_df.columns if 'similar' in c.lower() and 'material' in c.lower() and 'desc' not in c.lower()), similar_df.columns[2])
-                fam = similar_df[[sim_main_col, sim_sim_col]].astype(str).apply(
-                    lambda col: col.str.replace(r'\.0$', '', regex=True).str.strip()
-                ).drop_duplicates()
-                fam = fam[(fam[sim_main_col] != fam[sim_sim_col]) & ~fam[sim_main_col].isin(["", "nan"]) & ~fam[sim_sim_col].isin(["", "nan"])]
-                sim_pending_by_main = (
-                    fam.assign(_p=fam[sim_sim_col].map(pending_by_mat).fillna(0))
-                    .groupby(sim_main_col)["_p"].sum()
-                )
-                family_pending_dc = item_pending_dc + company_totals["Material"].astype(str).map(sim_pending_by_main).fillna(0).to_numpy()
+            family_pending_dc = company_totals["Material"].astype(str).map(family_pending_by_mat).fillna(item_pending_dc)
 
             company_totals["Company Purchase Quantity"] = (
                 pd.to_numeric(company_totals[purchase_req_col], errors="coerce").fillna(0)
